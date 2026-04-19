@@ -31,4 +31,7 @@ pub enum AppError {
 
     #[error("selected component has no symbol/footprint uuid")]
     MissingSymbolOrFootprint,
+
+    #[error("{0}")]
+    Other(String),
 }

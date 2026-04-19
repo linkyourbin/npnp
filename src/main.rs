@@ -1,4 +1,5 @@
 use clap::Parser;
+use syft::batch::{BatchOptions, export_batch};
 use syft::cli::{Cli, Commands};
 use syft::error::Result;
 use syft::lceda::LcedaClient;
@@ -129,6 +130,39 @@ async fn run() -> Result<()> {
             if let Some(path) = result.get("step") {
                 println!("STEP saved: {}", path.display());
             }
+        }
+        Commands::Batch {
+            input,
+            output,
+            schlib,
+            pcblib,
+            full,
+            parallel,
+            continue_on_error,
+            force,
+        } => {
+            let summary = export_batch(
+                &client,
+                BatchOptions {
+                    input,
+                    output,
+                    schlib,
+                    pcblib,
+                    full,
+                    parallel,
+                    continue_on_error,
+                    force,
+                },
+            )
+            .await?;
+            println!(
+                "Batch export complete. Total: {} | Skipped: {} | Success: {} | Failed: {}",
+                summary.total, summary.skipped, summary.success, summary.failed
+            );
+            if !summary.failed_ids.is_empty() {
+                println!("Failed IDs: {}", summary.failed_ids.join(", "));
+            }
+            println!("Output directory: {}", summary.output.display());
         }
     }
 

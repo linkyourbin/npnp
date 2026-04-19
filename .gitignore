@@ -1,4 +1,5 @@
-/target/generated
+/target
+/generated
 /compare
 /pcblib
 /schlib
