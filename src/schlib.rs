@@ -23,6 +23,8 @@ pub struct SchlibMetadata {
     pub designator: Option<String>,
     pub comment: Option<String>,
     pub parameters: Vec<SchlibParameter>,
+    pub footprint_model_name: Option<String>,
+    pub footprint_library_file: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -360,6 +362,7 @@ fn build_component(
         designator_text,
         comment_text,
         parameters,
+        implementations: Vec::new(),
         part_count: parts.len().max(1),
         pins: Vec::new(),
         rectangles: Vec::new(),
@@ -417,6 +420,7 @@ fn build_component(
                     owner_part_display_mode: 0,
                 });
             }
+            add_metadata_implementation(&mut component, metadata);
             return Ok(component);
         }
     }
@@ -583,7 +587,51 @@ fn build_component(
         }
     }
 
+    add_metadata_implementation(&mut component, metadata);
     Ok(component)
+}
+
+fn add_metadata_implementation(component: &mut Component, metadata: &SchlibMetadata) {
+    let Some(model_name) = metadata
+        .footprint_model_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    let data_file_entities = metadata
+        .footprint_library_file
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| vec![value.to_string()])
+        .unwrap_or_default();
+
+    let mut seen_designators = HashSet::new();
+    let mut map_definers = Vec::new();
+    for pin in &component.pins {
+        let designator = pin.designator.trim();
+        if designator.is_empty() || !seen_designators.insert(designator.to_ascii_lowercase()) {
+            continue;
+        }
+        map_definers.push(MapDefiner {
+            designator_interface: designator.to_string(),
+            designator_implementations: vec![designator.to_string()],
+            is_trivial: true,
+        });
+    }
+
+    component.implementations.push(Implementation {
+        description: Some("PCB footprint".to_string()),
+        model_name: model_name.to_string(),
+        model_type: "PCBLIB".to_string(),
+        is_current: true,
+        data_file_kinds: vec!["PCBLib".to_string()],
+        data_file_entities,
+        map_definers,
+    });
 }
 
 fn update_ellipse_bounds(bounds: &mut common::OptionalBounds, ellipse: &EllipseRaw) {
@@ -1146,7 +1194,9 @@ fn component_weight(component: &Component) -> usize {
         + component.arcs.len()
         + component.ellipses.len()
         + component.pins.len()
-        + 3
+        + component.parameters.len()
+        + 2
+        + implementation_record_count(component)
 }
 
 fn component_data_bytes(component: &Component) -> Vec<u8> {
@@ -1344,10 +1394,93 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
     c.push("NAME", "Comment");
     c.push("UNIQUEID", stable_unique_id(&component.name, "COMMENT"));
     writer.write_cstring_param_block(&c);
-    let mut f = common::Params::default();
-    f.push("RECORD", "44");
-    writer.write_cstring_param_block(&f);
+    write_implementation_records(&mut writer, component);
     writer.into_inner()
+}
+
+fn implementation_record_count(component: &Component) -> usize {
+    if component.implementations.is_empty() {
+        1
+    } else {
+        1 + component
+            .implementations
+            .iter()
+            .map(|implementation| 3 + implementation.map_definers.len())
+            .sum::<usize>()
+    }
+}
+
+fn write_implementation_records(writer: &mut common::BinaryWriter, component: &Component) {
+    let mut list = common::Params::default();
+    list.push("RECORD", "44");
+    writer.write_cstring_param_block(&list);
+
+    for (implementation_index, implementation) in component.implementations.iter().enumerate() {
+        let mut implementation_params = common::Params::default();
+        implementation_params.push("RECORD", "45");
+        if let Some(description) = implementation.description.as_deref() {
+            implementation_params.push("DESCRIPTION", description);
+        }
+        implementation_params.push("MODELNAME", &implementation.model_name);
+        implementation_params.push("MODELTYPE", &implementation.model_type);
+        implementation_params.push(
+            "DATAFILECOUNT",
+            implementation.data_file_kinds.len().to_string(),
+        );
+        for (data_file_index, kind) in implementation.data_file_kinds.iter().enumerate() {
+            implementation_params.push(format!("MODELDATAFILEKIND{}", data_file_index + 1), kind);
+            if let Some(entity) = implementation.data_file_entities.get(data_file_index) {
+                implementation_params.push(
+                    format!("MODELDATAFILEENTITY{}", data_file_index + 1),
+                    entity,
+                );
+            }
+        }
+        implementation_params.push_bool("ISCURRENT", implementation.is_current);
+        implementation_params.push(
+            "UNIQUEID",
+            stable_unique_id(
+                &component.name,
+                &format!("IMPL{implementation_index}_{}", implementation.model_name),
+            ),
+        );
+        writer.write_cstring_param_block(&implementation_params);
+
+        let mut map_definer_list = common::Params::default();
+        map_definer_list.push("RECORD", "46");
+        writer.write_cstring_param_block(&map_definer_list);
+
+        for (map_index, map_definer) in implementation.map_definers.iter().enumerate() {
+            let mut map_params = common::Params::default();
+            map_params.push("RECORD", "47");
+            map_params.push("DESINTF", &map_definer.designator_interface);
+            map_params.push(
+                "DESIMPCOUNT",
+                map_definer.designator_implementations.len().to_string(),
+            );
+            for (designator_index, designator) in
+                map_definer.designator_implementations.iter().enumerate()
+            {
+                map_params.push(format!("DESIMP{designator_index}"), designator);
+            }
+            map_params.push_bool("ISTRIVIAL", map_definer.is_trivial);
+            map_params.push(
+                "UNIQUEID",
+                stable_unique_id(
+                    &component.name,
+                    &format!(
+                        "MAP{implementation_index}_{map_index}_{}",
+                        map_definer.designator_interface
+                    ),
+                ),
+            );
+            writer.write_cstring_param_block(&map_params);
+        }
+
+        let mut implementation_parameters = common::Params::default();
+        implementation_parameters.push("RECORD", "48");
+        writer.write_cstring_param_block(&implementation_parameters);
+    }
 }
 
 fn push_owned_part(params: &mut common::Params, owner_part_id: i32) {
@@ -1611,6 +1744,7 @@ pub struct Component {
     designator_text: String,
     comment_text: String,
     parameters: Vec<SchlibParameter>,
+    implementations: Vec<Implementation>,
     part_count: usize,
     pins: Vec<Pin>,
     rectangles: Vec<Rectangle>,
@@ -1618,6 +1752,24 @@ pub struct Component {
     arcs: Vec<Arc>,
     ellipses: Vec<Ellipse>,
     labels: Vec<Label>,
+}
+
+#[derive(Debug)]
+struct Implementation {
+    description: Option<String>,
+    model_name: String,
+    model_type: String,
+    is_current: bool,
+    data_file_kinds: Vec<String>,
+    data_file_entities: Vec<String>,
+    map_definers: Vec<MapDefiner>,
+}
+
+#[derive(Debug)]
+struct MapDefiner {
+    designator_interface: String,
+    designator_implementations: Vec<String>,
+    is_trivial: bool,
 }
 
 #[cfg(test)]
@@ -1666,6 +1818,8 @@ mod tests {
                     value: "Raspberry Pi".to_string(),
                 },
             ],
+            footprint_model_name: Some("LQFN-56_L7.0-W7.0-P0.4-EP".to_string()),
+            footprint_library_file: Some("MyLib.PcbLib".to_string()),
         };
 
         write_schlib_from_payload_with_metadata(&sample_payload(), "TEST/COMP", &metadata, &path)
@@ -1690,6 +1844,16 @@ mod tests {
         assert!(data_text.contains("|TEXT=LQFN-56_L7.0-W7.0-P0.4-EP|"));
         assert!(data_text.contains("|NAME=Manufacturer|"));
         assert!(data_text.contains("|TEXT=Raspberry Pi|"));
+        assert!(data_text.contains("|RECORD=45|"));
+        assert!(data_text.contains("|MODELNAME=LQFN-56_L7.0-W7.0-P0.4-EP|"));
+        assert!(data_text.contains("|MODELTYPE=PCBLIB|"));
+        assert!(data_text.contains("|MODELDATAFILEKIND1=PCBLib|"));
+        assert!(data_text.contains("|MODELDATAFILEENTITY1=MyLib.PcbLib|"));
+        assert!(data_text.contains("|RECORD=46"));
+        assert!(data_text.contains("|RECORD=47|"));
+        assert!(data_text.contains("|DESINTF=1|"));
+        assert!(data_text.contains("|DESIMP0=1|"));
+        assert!(data_text.contains("|RECORD=48"));
     }
 
     #[test]

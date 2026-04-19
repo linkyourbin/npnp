@@ -178,8 +178,15 @@ fn build_schlib_component_from_detail(
     item: &SearchItem,
     symbol_data: &Value,
     component_name: &str,
+    footprint_model_name: Option<&str>,
+    footprint_library_file: Option<&str>,
 ) -> Result<Component> {
-    let metadata = build_schlib_metadata(item, symbol_data);
+    let metadata = build_schlib_metadata(
+        item,
+        symbol_data,
+        footprint_model_name,
+        footprint_library_file,
+    );
     build_component_from_payload_with_metadata(symbol_data, component_name, &metadata)
 }
 
@@ -199,12 +206,19 @@ pub async fn build_schlib_component_for_item(
     client: &LcedaClient,
     item: &SearchItem,
     component_name: &str,
+    footprint_library_file: Option<&str>,
 ) -> Result<Component> {
     let symbol_uuid = item
         .symbol_uuid()
         .ok_or(AppError::MissingSymbolOrFootprint)?;
     let symbol_data = client.component_detail(&symbol_uuid).await?;
-    build_schlib_component_from_detail(item, &symbol_data, component_name)
+    build_schlib_component_from_detail(
+        item,
+        &symbol_data,
+        component_name,
+        Some(component_name),
+        footprint_library_file,
+    )
 }
 pub async fn export_pcblib(
     client: &LcedaClient,
@@ -246,7 +260,25 @@ pub async fn export_schlib(
         return Ok(out_file);
     }
 
-    let component = build_schlib_component_from_detail(item, &symbol_data, &component_name)?;
+    let (footprint_model_name, footprint_library_file) =
+        if let Some(footprint_uuid) = item.footprint_uuid() {
+            let footprint_data = client.component_detail(&footprint_uuid).await?;
+            let footprint_name = resolved_component_name(item, &footprint_data);
+            (
+                Some(footprint_name.clone()),
+                Some(format!("{}.PcbLib", sanitize_filename(&footprint_name))),
+            )
+        } else {
+            (None, None)
+        };
+
+    let component = build_schlib_component_from_detail(
+        item,
+        &symbol_data,
+        &component_name,
+        footprint_model_name.as_deref(),
+        footprint_library_file.as_deref(),
+    )?;
     write_schlib(&component, &out_file)?;
     Ok(out_file)
 }
@@ -313,14 +345,26 @@ pub async fn export_bundle(
     Ok(exported)
 }
 
-fn build_schlib_metadata(item: &SearchItem, symbol_data: &Value) -> SchlibMetadata {
+fn build_schlib_metadata(
+    item: &SearchItem,
+    symbol_data: &Value,
+    footprint_model_name: Option<&str>,
+    footprint_library_file: Option<&str>,
+) -> SchlibMetadata {
     let mut parameters = Vec::new();
     let mut seen_names = std::collections::HashSet::new();
+    let resolved_footprint_name = footprint_model_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            first_non_empty([
+                nested_string(&item.raw, &["footprint", "display_title"]),
+                nested_string(&item.raw, &["attributes", "Supplier Footprint"]),
+            ])
+        });
 
-    if let Some(footprint_name) = first_non_empty([
-        nested_string(&item.raw, &["footprint", "display_title"]),
-        nested_string(&item.raw, &["attributes", "Supplier Footprint"]),
-    ]) {
+    if let Some(footprint_name) = resolved_footprint_name.as_deref() {
         push_schlib_parameter(
             &mut parameters,
             &mut seen_names,
@@ -354,6 +398,11 @@ fn build_schlib_metadata(item: &SearchItem, symbol_data: &Value) -> SchlibMetada
         designator: first_non_empty([nested_string(&item.raw, &["attributes", "Designator"])]),
         comment: resolve_schlib_comment(item),
         parameters,
+        footprint_model_name: resolved_footprint_name,
+        footprint_library_file: footprint_library_file
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
     }
 }
 

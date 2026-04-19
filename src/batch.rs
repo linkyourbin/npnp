@@ -173,8 +173,12 @@ async fn export_batch_merged(
     let mut pcblib_library = PcbLibrary::default();
     let mut first_error = None;
 
+    let merged_pcblib_file = format!("{}.PcbLib", sanitize_filename(&library_name));
+
     for id in ids {
-        let result = export_merged_component(client, targets, &id, &mut used_names).await;
+        let result =
+            export_merged_component(client, targets, &id, &mut used_names, &merged_pcblib_file)
+                .await;
         match result {
             Ok(artifacts) => {
                 if let Some(component) = artifacts.schlib_component {
@@ -232,12 +236,21 @@ async fn export_merged_component(
     targets: ExportTargets,
     lcsc_id: &str,
     used_names: &mut HashSet<String>,
+    merged_pcblib_file: &str,
 ) -> Result<MergeArtifacts> {
     let item = client.select_item(lcsc_id, 1).await?;
     let component_name = merged_component_name(&item, lcsc_id, used_names);
 
     let schlib_component = if targets.schlib {
-        Some(build_schlib_component_for_item(client, &item, &component_name).await?)
+        Some(
+            build_schlib_component_for_item(
+                client,
+                &item,
+                &component_name,
+                Some(merged_pcblib_file),
+            )
+            .await?,
+        )
     } else {
         None
     };
