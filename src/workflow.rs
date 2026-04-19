@@ -149,7 +149,7 @@ pub async fn export_pcblib(
             model_candidates.push(model_uuid);
         }
     }
-    if !model_candidates.is_empty() {
+    if item.model_uuid.is_some() {
         if let Ok(model_uuid) = client.get_model_uuid(item).await {
             if !model_candidates
                 .iter()

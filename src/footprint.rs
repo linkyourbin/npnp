@@ -1,4 +1,4 @@
-﻿use serde_json::Value;
+use serde_json::Value;
 
 use crate::error::{AppError, Result};
 use crate::pcblib::{
@@ -15,6 +15,7 @@ const RAW_PER_MIL: f64 = 10_000.0;
 const DEFAULT_GRAPHIC_WIDTH_MM: f64 = 0.05;
 const CIRCLE_SEGMENTS: usize = 32;
 const DEFAULT_CORNER_RADIUS_PERCENTAGE: u8 = 50;
+const MIN_COMPONENT_BODY_HEIGHT_MM: f64 = 0.2;
 
 pub fn build_pcblib_from_payload(
     payload: &Value,
@@ -29,6 +30,7 @@ pub fn build_pcblib_from_payload(
     let mut overlay_arcs = Vec::new();
     let mut overlay_regions = Vec::new();
     let mut bounds = Bounds::default();
+    let mut body_bounds = Bounds::default();
     let mut fallback_designator = 1usize;
 
     for row in &rows {
@@ -105,14 +107,23 @@ pub fn build_pcblib_from_payload(
             }
             "POLY" => {
                 let layer_code = row_i32(row, 4, -1);
-                if !is_overlay_layer(layer_code) {
-                    continue;
-                }
                 let stroke = row_f64(row, 5, 6.0);
                 let Some(shape_value) = row.get(6) else {
                     continue;
                 };
                 if let Some(circle) = try_parse_circle_shape(shape_value) {
+                    if is_component_body_layer(layer_code) {
+                        body_bounds.update_span(
+                            circle.cx - circle.radius,
+                            circle.cx + circle.radius,
+                            circle.cy - circle.radius,
+                            circle.cy + circle.radius,
+                        );
+                        continue;
+                    }
+                    if !is_overlay_layer(layer_code) {
+                        continue;
+                    }
                     bounds.update_span(
                         circle.cx - circle.radius,
                         circle.cx + circle.radius,
@@ -132,6 +143,13 @@ pub fn build_pcblib_from_payload(
                 if raw_points.len() < 2 {
                     continue;
                 }
+                if is_component_body_layer(layer_code) {
+                    body_bounds.update_from_raw_points(&raw_points);
+                    continue;
+                }
+                if !is_overlay_layer(layer_code) {
+                    continue;
+                }
                 bounds.update_from_raw_points(&raw_points);
                 overlay_polys.push(PolyRaw {
                     layer_code,
@@ -141,12 +159,31 @@ pub fn build_pcblib_from_payload(
             }
             "FILL" => {
                 let layer_code = row_i32(row, 4, -1);
-                if !is_overlay_layer(layer_code) {
-                    continue;
-                }
                 let Some(Value::Array(shapes)) = row.get(7) else {
                     continue;
                 };
+                if is_component_body_layer(layer_code) {
+                    for shape in shapes {
+                        if let Some(circle) = try_parse_circle_shape(shape) {
+                            body_bounds.update_span(
+                                circle.cx - circle.radius,
+                                circle.cx + circle.radius,
+                                circle.cy - circle.radius,
+                                circle.cy + circle.radius,
+                            );
+                            continue;
+                        }
+                        let raw_points = parse_path_raw_points(shape);
+                        if raw_points.len() < 3 {
+                            continue;
+                        }
+                        body_bounds.update_from_raw_points(&raw_points);
+                    }
+                    continue;
+                }
+                if !is_overlay_layer(layer_code) {
+                    continue;
+                }
                 for shape in shapes {
                     if let Some(circle) = try_parse_circle_shape(shape) {
                         bounds.update_span(
@@ -178,14 +215,18 @@ pub fn build_pcblib_from_payload(
             }
             "TRACK" => {
                 let layer_code = row_i32(row, 4, -1);
-                if !is_overlay_layer(layer_code) {
-                    continue;
-                }
                 let stroke = row_f64(row, 5, 6.0);
                 let x1 = row_f64(row, 6, 0.0);
                 let y1 = row_f64(row, 7, 0.0);
                 let x2 = row_f64(row, 8, 0.0);
                 let y2 = row_f64(row, 9, 0.0);
+                if is_component_body_layer(layer_code) {
+                    body_bounds.update_span(x1, x2, y1, y2);
+                    continue;
+                }
+                if !is_overlay_layer(layer_code) {
+                    continue;
+                }
                 bounds.update_span(x1, x2, y1, y2);
                 overlay_polys.push(PolyRaw {
                     layer_code,
@@ -195,14 +236,18 @@ pub fn build_pcblib_from_payload(
             }
             "RECT" => {
                 let layer_code = row_i32(row, 4, -1);
-                if !is_overlay_layer(layer_code) {
-                    continue;
-                }
                 let stroke = row_f64(row, 5, 6.0);
                 let x1 = row_f64(row, 6, 0.0);
                 let y1 = row_f64(row, 7, 0.0);
                 let x2 = row_f64(row, 8, x1);
                 let y2 = row_f64(row, 9, y1);
+                if is_component_body_layer(layer_code) {
+                    body_bounds.update_span(x1, x2, y1, y2);
+                    continue;
+                }
+                if !is_overlay_layer(layer_code) {
+                    continue;
+                }
                 bounds.update_span(x1, x2, y1, y2);
                 overlay_polys.push(PolyRaw {
                     layer_code,
@@ -218,14 +263,18 @@ pub fn build_pcblib_from_payload(
             }
             "CIRCLE" => {
                 let layer_code = row_i32(row, 4, -1);
-                if !is_overlay_layer(layer_code) {
-                    continue;
-                }
                 let stroke = row_f64(row, 5, 6.0);
                 let x = row_f64(row, 6, 0.0);
                 let y = row_f64(row, 7, 0.0);
                 let radius = row_f64(row, 8, 0.0).abs();
                 if radius <= 0.000_001 {
+                    continue;
+                }
+                if is_component_body_layer(layer_code) {
+                    body_bounds.update_span(x - radius, x + radius, y - radius, y + radius);
+                    continue;
+                }
+                if !is_overlay_layer(layer_code) {
                     continue;
                 }
                 bounds.update_span(x - radius, x + radius, y - radius, y + radius);
@@ -239,14 +288,18 @@ pub fn build_pcblib_from_payload(
             }
             "ARC" => {
                 let layer_code = row_i32(row, 4, -1);
-                if !is_overlay_layer(layer_code) {
-                    continue;
-                }
                 let stroke = row_f64(row, 5, 6.0);
                 let x = row_f64(row, 6, 0.0);
                 let y = row_f64(row, 7, 0.0);
                 let radius = row_f64(row, 8, 0.0).abs();
                 if radius <= 0.000_001 {
+                    continue;
+                }
+                if is_component_body_layer(layer_code) {
+                    body_bounds.update_span(x - radius, x + radius, y - radius, y + radius);
+                    continue;
+                }
+                if !is_overlay_layer(layer_code) {
                     continue;
                 }
                 bounds.update_span(x - radius, x + radius, y - radius, y + radius);
@@ -264,11 +317,8 @@ pub fn build_pcblib_from_payload(
         }
     }
 
-    let component_height_mm = model_3d
-        .as_ref()
-        .and_then(|model| model.height_mm)
-        .filter(|height| *height > 0.000_001)
-        .unwrap_or(1.0);
+    let component_height_mm =
+        resolve_component_height_mm(payload, component_name, model_3d.as_ref());
     let mut component = PcbComponent {
         name: component_name.to_string(),
         description: "Generated from EasyEDA footprint".to_string(),
@@ -381,7 +431,10 @@ pub fn build_pcblib_from_payload(
     }
 
     let mut library = PcbLibrary::default();
-    if let (Some(model), Some(step_data), Some(extents)) = (model_3d, step_bytes, bounds.finish()) {
+    let body_extents = body_bounds.finish().or_else(|| bounds.finish());
+    if let (Some(model), Some(step_data), Some(extents)) =
+        (model_3d.as_ref(), step_bytes, body_extents)
+    {
         let model_id = stable_guid(&format!("{}|{}", component_name, model.uri));
         let model_name = choose_step_model_name(component_name, &model.title);
         let center = coord_from_easy_units(
@@ -398,7 +451,7 @@ pub fn build_pcblib_from_payload(
             is_shape_based: false,
             cavity_height_raw: 0,
             standoff_height_raw: 0,
-            overall_height_raw: raw_from_mm(model.height_mm.unwrap_or(1.0).max(1.0)),
+            overall_height_raw: raw_from_mm(component_height_mm.max(MIN_COMPONENT_BODY_HEIGHT_MM)),
             body_color_3d: 0x808080,
             body_opacity_3d: 1.0,
             body_projection: 0,
@@ -416,12 +469,7 @@ pub fn build_pcblib_from_payload(
             model_source: "Undefined".to_string(),
             identifier: None,
             texture: String::new(),
-            outline: vec![
-                coord_from_easy_units(extents.min_x, extents.min_y),
-                coord_from_easy_units(extents.max_x, extents.min_y),
-                coord_from_easy_units(extents.max_x, extents.max_y),
-                coord_from_easy_units(extents.min_x, extents.max_y),
-            ],
+            outline: component_body_outline(extents),
             is_locked: false,
             is_tenting_top: false,
             is_tenting_bottom: false,
@@ -508,6 +556,38 @@ fn parse_footprint_3d_model(payload: &Value) -> Option<Model3dRaw> {
     Some(result)
 }
 
+fn resolve_component_height_mm(
+    payload: &Value,
+    component_name: &str,
+    model_3d: Option<&Model3dRaw>,
+) -> f64 {
+    if let Some(height) = model_3d
+        .and_then(|model| model.height_mm)
+        .filter(|height| *height > 0.000_001)
+    {
+        return height;
+    }
+
+    for candidate in [
+        nested_string(payload, &["result", "display_title"]),
+        nested_string(payload, &["result", "title"]),
+        nested_string(payload, &["result", "package"]),
+        Some(component_name.to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(height) = try_parse_height_from_model_title(&candidate) {
+            return height;
+        }
+        if let Some(height) = guess_package_family_height_mm(&candidate) {
+            return height;
+        }
+    }
+
+    1.0
+}
+
 fn try_parse_height_from_model_title(title: &str) -> Option<f64> {
     let normalized = title.trim().to_ascii_uppercase();
     let mut index = normalized.find("-H").or_else(|| normalized.find("_H"))? + 2;
@@ -519,6 +599,42 @@ fn try_parse_height_from_model_title(title: &str) -> Option<f64> {
     (index > start)
         .then(|| normalized[start..index].parse().ok())
         .flatten()
+}
+
+fn guess_package_family_height_mm(text: &str) -> Option<f64> {
+    let normalized = text.trim().to_ascii_uppercase();
+    if normalized.contains("QFN") || normalized.contains("DFN") || normalized.contains("LGA") {
+        Some(1.0)
+    } else if normalized.contains("BGA") {
+        Some(1.2)
+    } else if normalized.contains("QFP")
+        || normalized.contains("TQFP")
+        || normalized.contains("LQFP")
+    {
+        Some(1.4)
+    } else if normalized.contains("SOIC")
+        || normalized.contains("SOP")
+        || normalized.contains("SSOP")
+        || normalized.contains("TSSOP")
+        || normalized.contains("MSOP")
+    {
+        Some(1.6)
+    } else if normalized.contains("SOT") {
+        Some(1.6)
+    } else if normalized.contains("DIP") {
+        Some(4.0)
+    } else {
+        None
+    }
+}
+
+fn component_body_outline(extents: Extents) -> Vec<CoordPoint> {
+    vec![
+        coord_from_easy_units(extents.min_x, extents.min_y),
+        coord_from_easy_units(extents.max_x, extents.min_y),
+        coord_from_easy_units(extents.max_x, extents.max_y),
+        coord_from_easy_units(extents.min_x, extents.max_y),
+    ]
 }
 
 fn choose_step_model_name(component_name: &str, title: &str) -> String {
@@ -538,6 +654,10 @@ fn choose_step_model_name(component_name: &str, title: &str) -> String {
 
 fn is_overlay_layer(layer_code: i32) -> bool {
     matches!(layer_code, 3 | 4 | 49)
+}
+
+fn is_component_body_layer(layer_code: i32) -> bool {
+    matches!(layer_code, 48 | 99)
 }
 
 fn map_graphic_layer(layer_code: i32) -> u8 {
@@ -883,5 +1003,16 @@ mod tests {
         assert_eq!(component.regions.len(), 1);
         assert_eq!(component.bodies.len(), 1);
         assert_eq!(library.models.len(), 1);
+    }
+
+    #[test]
+    fn skips_body_when_step_model_is_missing() {
+        let payload = json!({"result": {"display_title": "QFN-60_L7.0-W7.0-P0.40-TL-EP3.4", "dataStr": r#"["DOCTYPE","FOOTPRINT","1.8"]
+["PAD","e1",0,"",1,"1",0,0,0,null,["RECT",20,30,0],[],0,0,0,1]
+["POLY","body",0,"",48,2,[-120,120,"L",120,120,120,-120,-120,-120,-120,120],0]"#}});
+        let library = build_pcblib_from_payload(&payload, "RP2350A_C42411118", None).unwrap();
+        let component = &library.components[0];
+        assert_eq!(library.models.len(), 0);
+        assert_eq!(component.bodies.len(), 0);
     }
 }
