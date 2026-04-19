@@ -23,6 +23,13 @@ impl SearchItem {
         }
     }
 
+    pub fn lcsc_id(&self) -> Option<String> {
+        nested_string(&self.raw, &["product_code"])
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| nested_string(&self.raw, &["attributes", "Supplier Part"]))
+            .filter(|value| !value.trim().is_empty())
+    }
+
     pub fn choose_step_filename(&self) -> String {
         let base = nested_string(&self.raw, &["footprint", "display_title"])
             .filter(|value| !value.is_empty())
@@ -46,5 +53,47 @@ impl SearchItem {
     pub fn footprint_uuid(&self) -> Option<String> {
         nested_string(&self.raw, &["footprint", "uuid"])
             .or_else(|| nested_string(&self.raw, &["attributes", "Footprint"]))
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::SearchItem;
+    use serde_json::json;
+
+    #[test]
+    fn prefers_product_code_for_lcsc_id() {
+        let item = SearchItem {
+            index: 1,
+            display_title: "TYPE-C".to_string(),
+            title: String::new(),
+            manufacturer: String::new(),
+            model_uuid: None,
+            raw: json!({
+                "product_code": "C2765186",
+                "attributes": {
+                    "Supplier Part": "C123"
+                }
+            }),
+        };
+
+        assert_eq!(item.lcsc_id().as_deref(), Some("C2765186"));
+    }
+
+    #[test]
+    fn falls_back_to_supplier_part_for_lcsc_id() {
+        let item = SearchItem {
+            index: 1,
+            display_title: "TYPE-C".to_string(),
+            title: String::new(),
+            manufacturer: String::new(),
+            model_uuid: None,
+            raw: json!({
+                "attributes": {
+                    "Supplier Part": "C2765186"
+                }
+            }),
+        };
+
+        assert_eq!(item.lcsc_id().as_deref(), Some("C2765186"));
     }
 }

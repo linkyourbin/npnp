@@ -40,15 +40,17 @@ async fn run() -> Result<()> {
                 } else {
                     "no"
                 };
+                let lcsc_id = item.lcsc_id().unwrap_or_else(|| "-".to_string());
                 let manufacturer = if item.manufacturer.is_empty() {
                     "-"
                 } else {
                     item.manufacturer.as_str()
                 };
                 println!(
-                    "[{:>3}] {} | Manufacturer: {} | 3D model: {}",
+                    "[{:>3}] {} | LCSC ID: {} | Manufacturer: {} | 3D model: {}",
                     item.index,
                     item.display_name(),
+                    lcsc_id,
                     manufacturer,
                     model_flag
                 );

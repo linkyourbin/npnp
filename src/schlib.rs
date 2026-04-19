@@ -1,6 +1,6 @@
-#[path = "schlib.rs"]
+#[path = "schlib_common.rs"]
 #[allow(dead_code)]
-mod old;
+mod common;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -59,13 +59,13 @@ fn build_component(
     component_name: &str,
     metadata: &SchlibMetadata,
 ) -> Result<Component> {
-    let rows = old::parse_easyeda_rows(payload)?;
+    let rows = common::parse_easyeda_rows(payload)?;
     let mut parts: Vec<PartRaw> = Vec::new();
     let mut current_part_index = None;
     let mut has_part_rows = false;
     let mut attr_by_parent: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut root_attrs: HashMap<String, String> = HashMap::new();
-    let mut global_bounds = old::OptionalBounds::default();
+    let mut global_bounds = common::OptionalBounds::default();
 
     for row in &rows {
         let Some(row_type) = row.first().and_then(Value::as_str) else {
@@ -74,7 +74,7 @@ fn build_component(
         match row_type.trim().to_ascii_uppercase().as_str() {
             "PART" => {
                 has_part_rows = true;
-                let bounds = old::part_bounds_from_row(row);
+                let bounds = common::part_bounds_from_row(row);
                 if let Some(bounds) = bounds {
                     global_bounds.update_x(bounds.min_x_units, bounds.max_x_units);
                     global_bounds.update_y(bounds.min_y_units, bounds.max_y_units);
@@ -84,13 +84,13 @@ fn build_component(
                 current_part_index = Some(parts.len() - 1);
             }
             "ATTR" => {
-                let parent = old::row_string(row, 2);
-                let key = old::row_string(row, 3);
+                let parent = common::row_string(row, 2);
+                let key = common::row_string(row, 3);
                 if key.trim().is_empty() {
                     continue;
                 }
                 let key_upper = key.trim().to_ascii_uppercase();
-                let value = old::row_string(row, 4);
+                let value = common::row_string(row, 4);
                 if parent.trim().is_empty() {
                     root_attrs.insert(key_upper, value);
                     continue;
@@ -99,24 +99,24 @@ fn build_component(
                 attrs.insert(key_upper.clone(), value);
                 attrs.insert(
                     format!("{key_upper}__VISIBLE"),
-                    old::row_bool(row, 6, true).to_string(),
+                    common::row_bool(row, 6, true).to_string(),
                 );
             }
             "PIN" => {
                 let part_index = ensure_current_part_index(&mut parts, &mut current_part_index);
                 let owner_part_id = parts[part_index].owner_part_id;
                 let pin = PinRaw {
-                    id: old::row_string(row, 1),
-                    x_units: old::row_f64(row, 4, 0.0),
-                    y_units: old::row_f64(row, 5, 0.0),
-                    length_units: old::row_f64(row, 6, PIN_LENGTH_UNITS),
-                    rotation_degrees: old::row_f64(row, 7, 0.0),
+                    id: common::row_string(row, 1),
+                    x_units: common::row_f64(row, 4, 0.0),
+                    y_units: common::row_f64(row, 5, 0.0),
+                    length_units: common::row_f64(row, 6, PIN_LENGTH_UNITS),
+                    rotation_degrees: common::row_f64(row, 7, 0.0),
                     owner_part_id,
                 };
                 if pin.id.trim().is_empty() {
                     continue;
                 }
-                let angle = old::normalize_angle(pin.rotation_degrees);
+                let angle = common::normalize_angle(pin.rotation_degrees);
                 let (dx, dy) = if !(45.0..315.0).contains(&angle) {
                     (pin.length_units, 0.0)
                 } else if angle < 135.0 {
@@ -140,10 +140,10 @@ fn build_component(
                 let part_index = ensure_current_part_index(&mut parts, &mut current_part_index);
                 let owner_part_id = parts[part_index].owner_part_id;
                 let rect = RectRaw {
-                    x1_units: old::row_f64(row, 2, 0.0),
-                    y1_units: old::row_f64(row, 3, 0.0),
-                    x2_units: old::row_f64(row, 4, 0.0),
-                    y2_units: old::row_f64(row, 5, 0.0),
+                    x1_units: common::row_f64(row, 2, 0.0),
+                    y1_units: common::row_f64(row, 3, 0.0),
+                    x2_units: common::row_f64(row, 4, 0.0),
+                    y2_units: common::row_f64(row, 5, 0.0),
                     owner_part_id,
                 };
                 let min_x = rect.x1_units.min(rect.x2_units);
@@ -184,12 +184,12 @@ fn build_component(
             "LINE" => {
                 let points = vec![
                     PointUnits {
-                        x_units: old::row_f64(row, 2, 0.0),
-                        y_units: old::row_f64(row, 3, 0.0),
+                        x_units: common::row_f64(row, 2, 0.0),
+                        y_units: common::row_f64(row, 3, 0.0),
                     },
                     PointUnits {
-                        x_units: old::row_f64(row, 4, 0.0),
-                        y_units: old::row_f64(row, 5, 0.0),
+                        x_units: common::row_f64(row, 4, 0.0),
+                        y_units: common::row_f64(row, 5, 0.0),
                     },
                 ];
                 let part_index = ensure_current_part_index(&mut parts, &mut current_part_index);
@@ -214,16 +214,16 @@ fn build_component(
                 let owner_part_id = parts[part_index].owner_part_id;
                 let arc = ArcRaw {
                     start: PointUnits {
-                        x_units: old::row_f64(row, 2, 0.0),
-                        y_units: old::row_f64(row, 3, 0.0),
+                        x_units: common::row_f64(row, 2, 0.0),
+                        y_units: common::row_f64(row, 3, 0.0),
                     },
                     mid: PointUnits {
-                        x_units: old::row_f64(row, 4, 0.0),
-                        y_units: old::row_f64(row, 5, 0.0),
+                        x_units: common::row_f64(row, 4, 0.0),
+                        y_units: common::row_f64(row, 5, 0.0),
                     },
                     end: PointUnits {
-                        x_units: old::row_f64(row, 6, 0.0),
-                        y_units: old::row_f64(row, 7, 0.0),
+                        x_units: common::row_f64(row, 6, 0.0),
+                        y_units: common::row_f64(row, 7, 0.0),
                     },
                     owner_part_id,
                 };
@@ -240,7 +240,7 @@ fn build_component(
                 parts[part_index].arcs.push(arc);
             }
             "CIRCLE" => {
-                let r = old::row_f64(row, 4, 0.0).abs();
+                let r = common::row_f64(row, 4, 0.0).abs();
                 if r <= 0.000001 {
                     continue;
                 }
@@ -248,8 +248,8 @@ fn build_component(
                 let owner_part_id = parts[part_index].owner_part_id;
                 let filled = r <= 1.0 + f64::EPSILON;
                 let ellipse = EllipseRaw {
-                    center_x_units: old::row_f64(row, 2, 0.0),
-                    center_y_units: old::row_f64(row, 3, 0.0),
+                    center_x_units: common::row_f64(row, 2, 0.0),
+                    center_y_units: common::row_f64(row, 3, 0.0),
                     radius_x_units: r,
                     radius_y_units: r,
                     owner_part_id,
@@ -261,8 +261,8 @@ fn build_component(
                 parts[part_index].ellipses.push(ellipse);
             }
             "ELLIPSE" => {
-                let rx = old::row_f64(row, 4, 0.0).abs();
-                let ry = old::row_f64(row, 5, 0.0).abs();
+                let rx = common::row_f64(row, 4, 0.0).abs();
+                let ry = common::row_f64(row, 5, 0.0).abs();
                 if rx <= 0.000001 || ry <= 0.000001 {
                     continue;
                 }
@@ -270,8 +270,8 @@ fn build_component(
                 let owner_part_id = parts[part_index].owner_part_id;
                 let filled = rx.max(ry) <= 1.0 + f64::EPSILON;
                 let ellipse = EllipseRaw {
-                    center_x_units: old::row_f64(row, 2, 0.0),
-                    center_y_units: old::row_f64(row, 3, 0.0),
+                    center_x_units: common::row_f64(row, 2, 0.0),
+                    center_y_units: common::row_f64(row, 3, 0.0),
                     radius_x_units: rx,
                     radius_y_units: ry,
                     owner_part_id,
@@ -283,7 +283,7 @@ fn build_component(
                 parts[part_index].ellipses.push(ellipse);
             }
             "TEXT" => {
-                let text = normalize_text_value(&old::row_string(row, 5));
+                let text = normalize_text_value(&common::row_string(row, 5));
                 if text.is_empty() {
                     continue;
                 }
@@ -291,9 +291,9 @@ fn build_component(
                 let owner_part_id = parts[part_index].owner_part_id;
                 let label = TextRaw {
                     text,
-                    x_units: old::row_f64(row, 2, 0.0),
-                    y_units: old::row_f64(row, 3, 0.0),
-                    rotation_degrees: old::row_f64(row, 4, 0.0),
+                    x_units: common::row_f64(row, 2, 0.0),
+                    y_units: common::row_f64(row, 3, 0.0),
+                    rotation_degrees: common::row_f64(row, 4, 0.0),
                     owner_part_id,
                 };
                 parts[part_index]
@@ -359,10 +359,10 @@ fn build_component(
     let has_original_graphics = parts.iter().any(PartRaw::has_graphics);
 
     if !has_original_graphics && !has_part_rows {
-        let layout_pins: Vec<old::PinRaw> = parts[0]
+        let layout_pins: Vec<common::PinRaw> = parts[0]
             .pins
             .iter()
-            .map(|pin| old::PinRaw {
+            .map(|pin| common::PinRaw {
                 id: pin.id.clone(),
                 x_units: pin.x_units,
                 y_units: pin.y_units,
@@ -370,19 +370,19 @@ fn build_component(
                 rotation_degrees: pin.rotation_degrees,
             })
             .collect();
-        let (placed_pins, laid_out_rect) = old::layout_pins(&layout_pins, &attr_by_parent);
+        let (placed_pins, laid_out_rect) = common::layout_pins(&layout_pins, &attr_by_parent);
         if !placed_pins.is_empty() {
             component.rectangles.push(Rectangle {
-                corner1: old::CoordPoint::from_symbol_units(
+                corner1: common::CoordPoint::from_symbol_units(
                     laid_out_rect.x1_units,
                     laid_out_rect.height_units() - laid_out_rect.y1_units,
                 ),
-                corner2: old::CoordPoint::from_symbol_units(
+                corner2: common::CoordPoint::from_symbol_units(
                     laid_out_rect.x2_units,
                     laid_out_rect.height_units() - laid_out_rect.y2_units,
                 ),
-                color_bgr: old::BORDER_BGR,
-                fill_color_bgr: old::FILL_BGR,
+                color_bgr: common::BORDER_BGR,
+                fill_color_bgr: common::FILL_BGR,
                 is_filled: true,
                 is_transparent: false,
                 line_width_index: BODY_LINE_WIDTH_INDEX,
@@ -392,15 +392,15 @@ fn build_component(
                 component.pins.push(Pin {
                     designator: pin.designator,
                     name: pin.name,
-                    location: old::CoordPoint::from_symbol_units(
+                    location: common::CoordPoint::from_symbol_units(
                         pin.x_units,
                         laid_out_rect.height_units() - pin.y_units,
                     ),
-                    length_raw: old::raw_from_symbol_units(pin.length_units),
+                    length_raw: common::raw_from_symbol_units(pin.length_units),
                     orientation: pin_orientation_from_easyeda_rotation(pin.rotation_degrees),
                     show_name: pin.show_name,
                     show_designator: pin.show_designator,
-                    color_bgr: old::RED_BGR,
+                    color_bgr: common::RED_BGR,
                     owner_part_id: 1,
                     owner_part_display_mode: 0,
                 });
@@ -415,10 +415,10 @@ fn build_component(
         if !part.rectangles.is_empty() {
             for rect in &part.rectangles {
                 component.rectangles.push(Rectangle {
-                    corner1: old::CoordPoint::from_symbol_units(rect.x1_units, rect.y1_units),
-                    corner2: old::CoordPoint::from_symbol_units(rect.x2_units, rect.y2_units),
-                    color_bgr: old::BORDER_BGR,
-                    fill_color_bgr: if complex { WHITE_BGR } else { old::FILL_BGR },
+                    corner1: common::CoordPoint::from_symbol_units(rect.x1_units, rect.y1_units),
+                    corner2: common::CoordPoint::from_symbol_units(rect.x2_units, rect.y2_units),
+                    color_bgr: common::BORDER_BGR,
+                    fill_color_bgr: if complex { WHITE_BGR } else { common::FILL_BGR },
                     is_filled: !complex,
                     is_transparent: complex,
                     line_width_index: BODY_LINE_WIDTH_INDEX,
@@ -429,16 +429,16 @@ fn build_component(
         } else if let Some(bounds) = part.bounds.finish() {
             if !part.pins.is_empty() && !part.has_graphics() {
                 component.rectangles.push(Rectangle {
-                    corner1: old::CoordPoint::from_symbol_units(
+                    corner1: common::CoordPoint::from_symbol_units(
                         bounds.min_x_units,
                         bounds.max_y_units,
                     ),
-                    corner2: old::CoordPoint::from_symbol_units(
+                    corner2: common::CoordPoint::from_symbol_units(
                         bounds.max_x_units,
                         bounds.min_y_units,
                     ),
-                    color_bgr: old::BORDER_BGR,
-                    fill_color_bgr: if complex { WHITE_BGR } else { old::FILL_BGR },
+                    color_bgr: common::BORDER_BGR,
+                    fill_color_bgr: if complex { WHITE_BGR } else { common::FILL_BGR },
                     is_filled: !complex,
                     is_transparent: complex,
                     line_width_index: BODY_LINE_WIDTH_INDEX,
@@ -452,9 +452,11 @@ fn build_component(
                 points: polyline
                     .points
                     .iter()
-                    .map(|point| old::CoordPoint::from_symbol_units(point.x_units, point.y_units))
+                    .map(|point| {
+                        common::CoordPoint::from_symbol_units(point.x_units, point.y_units)
+                    })
                     .collect(),
-                color_bgr: old::RED_BGR,
+                color_bgr: common::RED_BGR,
                 line_width_index: GRAPHIC_LINE_WIDTH_INDEX,
                 owner_part_id: polyline.owner_part_id,
             });
@@ -466,11 +468,11 @@ fn build_component(
             } else {
                 component.polylines.push(Polyline {
                     points: vec![
-                        old::CoordPoint::from_symbol_units(arc.start.x_units, arc.start.y_units),
-                        old::CoordPoint::from_symbol_units(arc.mid.x_units, arc.mid.y_units),
-                        old::CoordPoint::from_symbol_units(arc.end.x_units, arc.end.y_units),
+                        common::CoordPoint::from_symbol_units(arc.start.x_units, arc.start.y_units),
+                        common::CoordPoint::from_symbol_units(arc.mid.x_units, arc.mid.y_units),
+                        common::CoordPoint::from_symbol_units(arc.end.x_units, arc.end.y_units),
                     ],
-                    color_bgr: old::RED_BGR,
+                    color_bgr: common::RED_BGR,
                     line_width_index: GRAPHIC_LINE_WIDTH_INDEX,
                     owner_part_id: arc.owner_part_id,
                 });
@@ -479,15 +481,15 @@ fn build_component(
         }
         for ellipse in &part.ellipses {
             component.ellipses.push(Ellipse {
-                center: old::CoordPoint::from_symbol_units(
+                center: common::CoordPoint::from_symbol_units(
                     ellipse.center_x_units,
                     ellipse.center_y_units,
                 ),
-                radius_x_raw: old::raw_from_symbol_units(ellipse.radius_x_units),
-                radius_y_raw: old::raw_from_symbol_units(ellipse.radius_y_units),
-                color_bgr: old::RED_BGR,
+                radius_x_raw: common::raw_from_symbol_units(ellipse.radius_x_units),
+                radius_y_raw: common::raw_from_symbol_units(ellipse.radius_y_units),
+                color_bgr: common::RED_BGR,
                 fill_color_bgr: if ellipse.is_filled {
-                    old::RED_BGR
+                    common::RED_BGR
                 } else {
                     WHITE_BGR
                 },
@@ -501,19 +503,19 @@ fn build_component(
         for label in &part.labels {
             component.labels.push(Label {
                 text: label.text.clone(),
-                location: old::CoordPoint::from_symbol_units(label.x_units, label.y_units),
+                location: common::CoordPoint::from_symbol_units(label.x_units, label.y_units),
                 orientation: text_orientation_from_rotation(label.rotation_degrees),
-                color_bgr: old::RED_BGR,
+                color_bgr: common::RED_BGR,
                 owner_part_id: label.owner_part_id,
             });
             has_any_body = true;
         }
         for (pin_index, pin) in part.pins.iter().enumerate() {
             let attrs = attr_by_parent.get(&pin.id);
-            let designator = old::safe_attr(attrs, "NUMBER")
+            let designator = common::safe_attr(attrs, "NUMBER")
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| (pin_index + 1).to_string());
-            let name = old::safe_attr(attrs, "NAME")
+            let name = common::safe_attr(attrs, "NAME")
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| designator.clone());
             let source_length_units = if pin.length_units > 0.000001 {
@@ -522,25 +524,26 @@ fn build_component(
                 10.0
             };
             let export_length_units = PIN_LENGTH_UNITS;
-            let show_name = old::safe_attr_flag(attrs, "NAME", !name.trim().is_empty());
-            let show_designator = old::safe_attr_flag(attrs, "NUMBER", true);
+            let show_name = common::safe_attr_flag(attrs, "NAME", !name.trim().is_empty());
+            let show_designator = common::safe_attr_flag(attrs, "NUMBER", true);
             let (location_x_units, location_y_units) = pin_inner_location_from_easyeda(
                 pin.x_units,
                 pin.y_units,
                 source_length_units,
                 pin.rotation_degrees,
             );
-            let location = old::CoordPoint::from_symbol_units(location_x_units, location_y_units);
-            let orientation = old::pin_orientation_from_rotation(pin.rotation_degrees);
+            let location =
+                common::CoordPoint::from_symbol_units(location_x_units, location_y_units);
+            let orientation = common::pin_orientation_from_rotation(pin.rotation_degrees);
             component.pins.push(Pin {
                 designator,
                 name: name.clone(),
                 location,
-                length_raw: old::raw_from_symbol_units(export_length_units),
+                length_raw: common::raw_from_symbol_units(export_length_units),
                 orientation,
                 show_name,
                 show_designator,
-                color_bgr: old::RED_BGR,
+                color_bgr: common::RED_BGR,
                 owner_part_id: pin.owner_part_id,
                 owner_part_display_mode: 0,
             });
@@ -550,9 +553,15 @@ fn build_component(
     if !has_any_body {
         if let Some(bounds) = global_bounds.finish() {
             component.rectangles.push(Rectangle {
-                corner1: old::CoordPoint::from_symbol_units(bounds.min_x_units, bounds.max_y_units),
-                corner2: old::CoordPoint::from_symbol_units(bounds.max_x_units, bounds.min_y_units),
-                color_bgr: old::BORDER_BGR,
+                corner1: common::CoordPoint::from_symbol_units(
+                    bounds.min_x_units,
+                    bounds.max_y_units,
+                ),
+                corner2: common::CoordPoint::from_symbol_units(
+                    bounds.max_x_units,
+                    bounds.min_y_units,
+                ),
+                color_bgr: common::BORDER_BGR,
                 fill_color_bgr: WHITE_BGR,
                 is_filled: false,
                 is_transparent: true,
@@ -565,7 +574,7 @@ fn build_component(
     Ok(component)
 }
 
-fn update_ellipse_bounds(bounds: &mut old::OptionalBounds, ellipse: &EllipseRaw) {
+fn update_ellipse_bounds(bounds: &mut common::OptionalBounds, ellipse: &EllipseRaw) {
     bounds.update_x(
         ellipse.center_x_units - ellipse.radius_x_units,
         ellipse.center_x_units + ellipse.radius_x_units,
@@ -616,10 +625,11 @@ fn parse_path_array_points(values: &[Value]) -> Vec<PointUnits> {
                     }
                     "M" | "L" => {
                         while index + 1 < values.len() {
-                            let Some(x) = values.get(index).and_then(old::value_as_f64) else {
+                            let Some(x) = values.get(index).and_then(common::value_as_f64) else {
                                 break;
                             };
-                            let Some(y) = values.get(index + 1).and_then(old::value_as_f64) else {
+                            let Some(y) = values.get(index + 1).and_then(common::value_as_f64)
+                            else {
                                 break;
                             };
                             add_path_point(&mut points, x, y);
@@ -635,7 +645,7 @@ fn parse_path_array_points(values: &[Value]) -> Vec<PointUnits> {
                     }
                     "H" => {
                         while index < values.len() {
-                            let Some(x) = values.get(index).and_then(old::value_as_f64) else {
+                            let Some(x) = values.get(index).and_then(common::value_as_f64) else {
                                 break;
                             };
                             let y = current.map_or(0.0, |point| point.y_units);
@@ -652,7 +662,7 @@ fn parse_path_array_points(values: &[Value]) -> Vec<PointUnits> {
                     }
                     "V" => {
                         while index < values.len() {
-                            let Some(y) = values.get(index).and_then(old::value_as_f64) else {
+                            let Some(y) = values.get(index).and_then(common::value_as_f64) else {
                                 break;
                             };
                             let x = current.map_or(0.0, |point| point.x_units);
@@ -670,8 +680,8 @@ fn parse_path_array_points(values: &[Value]) -> Vec<PointUnits> {
                     "ARC" | "A" => {
                         if index + 2 < values.len() {
                             if let (Some(x), Some(y)) = (
-                                values.get(index + 1).and_then(old::value_as_f64),
-                                values.get(index + 2).and_then(old::value_as_f64),
+                                values.get(index + 1).and_then(common::value_as_f64),
+                                values.get(index + 2).and_then(common::value_as_f64),
                             ) {
                                 add_path_point(&mut points, x, y);
                                 current = Some(PointUnits {
@@ -691,8 +701,8 @@ fn parse_path_array_points(values: &[Value]) -> Vec<PointUnits> {
             _ => {
                 if index + 1 < values.len() {
                     if let (Some(x), Some(y)) = (
-                        values.get(index).and_then(old::value_as_f64),
-                        values.get(index + 1).and_then(old::value_as_f64),
+                        values.get(index).and_then(common::value_as_f64),
+                        values.get(index + 1).and_then(common::value_as_f64),
                     ) {
                         add_path_point(&mut points, x, y);
                         current = Some(PointUnits {
@@ -967,7 +977,7 @@ fn same_point(left: PointUnits, right: PointUnits) -> bool {
 pub fn write_schlib(component: &Component, output_path: &Path) -> Result<()> {
     let file = File::create(output_path)?;
     let mut compound = cfb::CompoundFile::create(file)?;
-    let section_key = old::section_key_from_name(&component.name);
+    let section_key = common::section_key_from_name(&component.name);
     write_stream(&mut compound, "/FileHeader", &file_header_bytes(component))?;
     if section_key != component.name {
         write_stream(
@@ -997,8 +1007,8 @@ fn write_stream(
 }
 
 fn file_header_bytes(component: &Component) -> Vec<u8> {
-    let mut writer = old::BinaryWriter::default();
-    let mut params = old::Params::default();
+    let mut writer = common::BinaryWriter::default();
+    let mut params = common::Params::default();
     params.push(
         "HEADER",
         "Protel for Windows - Schematic Library Editor Binary File Version 5.0",
@@ -1035,8 +1045,8 @@ fn file_header_bytes(component: &Component) -> Vec<u8> {
 }
 
 fn section_keys_bytes(component_name: &str, section_key: &str) -> Vec<u8> {
-    let mut writer = old::BinaryWriter::default();
-    let mut params = old::Params::default();
+    let mut writer = common::BinaryWriter::default();
+    let mut params = common::Params::default();
     params.push("KeyCount", "1");
     params.push("LibRef0", component_name);
     params.push("SectionKey0", section_key);
@@ -1044,8 +1054,8 @@ fn section_keys_bytes(component_name: &str, section_key: &str) -> Vec<u8> {
     writer.into_inner()
 }
 fn storage_bytes() -> Vec<u8> {
-    let mut writer = old::BinaryWriter::default();
-    let mut params = old::Params::default();
+    let mut writer = common::BinaryWriter::default();
+    let mut params = common::Params::default();
     params.push("HEADER", "Icon storage");
     writer.write_cstring_param_block(&params);
     writer.into_inner()
@@ -1061,8 +1071,8 @@ fn schlib_weight(component: &Component) -> usize {
 }
 
 fn component_data_bytes(component: &Component) -> Vec<u8> {
-    let mut writer = old::BinaryWriter::default();
-    let mut params = old::Params::default();
+    let mut writer = common::BinaryWriter::default();
+    let mut params = common::Params::default();
     params.push("RECORD", "1");
     params.push("LIBREFERENCE", &component.name);
     params.push("COMPONENTDESCRIPTION", &component.description);
@@ -1084,7 +1094,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
     }
     writer.write_cstring_param_block(&params);
     for (index, rect) in component.rectangles.iter().enumerate() {
-        let mut p = old::Params::default();
+        let mut p = common::Params::default();
         p.push("RECORD", "14");
         push_owned_part(&mut p, rect.owner_part_id);
         p.push_coord("LOCATION.X", rect.corner1.x_raw);
@@ -1106,7 +1116,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
         writer.write_cstring_param_block(&p);
     }
     for (index, label) in component.labels.iter().enumerate() {
-        let mut p = old::Params::default();
+        let mut p = common::Params::default();
         p.push("RECORD", "4");
         push_owned_part(&mut p, label.owner_part_id);
         p.push_coord("LOCATION.X", label.location.x_raw);
@@ -1125,7 +1135,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
         writer.write_cstring_param_block(&p);
     }
     for (index, polyline) in component.polylines.iter().enumerate() {
-        let mut p = old::Params::default();
+        let mut p = common::Params::default();
         p.push("RECORD", "6");
         push_owned_part(&mut p, polyline.owner_part_id);
         p.push("LINEWIDTH", polyline.line_width_index.to_string());
@@ -1145,7 +1155,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
         writer.write_cstring_param_block(&p);
     }
     for (index, arc) in component.arcs.iter().enumerate() {
-        let mut p = old::Params::default();
+        let mut p = common::Params::default();
         p.push("RECORD", "12");
         push_owned_part(&mut p, arc.owner_part_id);
         p.push_coord("LOCATION.X", arc.center.x_raw);
@@ -1167,7 +1177,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
         writer.write_cstring_param_block(&p);
     }
     for (index, ellipse) in component.ellipses.iter().enumerate() {
-        let mut p = old::Params::default();
+        let mut p = common::Params::default();
         p.push("RECORD", "8");
         push_owned_part(&mut p, ellipse.owner_part_id);
         p.push_coord("LOCATION.X", ellipse.center.x_raw);
@@ -1202,9 +1212,9 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
             w.write_u8(0);
             w.write_u8(4);
             w.write_u8(pin_conglomerate(pin));
-            w.write_i16(old::dxp_i16(pin.length_raw));
-            w.write_i16(old::dxp_i16(pin.location.x_raw));
-            w.write_i16(old::dxp_i16(pin.location.y_raw));
+            w.write_i16(common::dxp_i16(pin.length_raw));
+            w.write_i16(common::dxp_i16(pin.location.x_raw));
+            w.write_i16(common::dxp_i16(pin.location.y_raw));
             w.write_i32(pin.color_bgr);
             w.write_pascal_short_string(&pin.name);
             w.write_pascal_short_string(&pin.designator);
@@ -1214,7 +1224,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
         });
     }
     for (index, parameter) in component.parameters.iter().enumerate() {
-        let mut p = old::Params::default();
+        let mut p = common::Params::default();
         p.push("RECORD", "41");
         p.push("OWNERPARTID", "-1");
         p.push("LOCATION.X_FRAC", "-5");
@@ -1231,7 +1241,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
         writer.write_cstring_param_block(&p);
     }
 
-    let mut d = old::Params::default();
+    let mut d = common::Params::default();
     d.push("RECORD", "34");
     d.push("OWNERPARTID", "-1");
     d.push("LOCATION.X_FRAC", "-5");
@@ -1243,7 +1253,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
     d.push("READONLYSTATE", "1");
     d.push("UNIQUEID", stable_unique_id(&component.name, "DESIGNATOR"));
     writer.write_cstring_param_block(&d);
-    let mut c = old::Params::default();
+    let mut c = common::Params::default();
     c.push("RECORD", "41");
     c.push("OWNERPARTID", "-1");
     c.push("LOCATION.X_FRAC", "-5");
@@ -1255,24 +1265,24 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
     c.push("NAME", "Comment");
     c.push("UNIQUEID", stable_unique_id(&component.name, "COMMENT"));
     writer.write_cstring_param_block(&c);
-    let mut f = old::Params::default();
+    let mut f = common::Params::default();
     f.push("RECORD", "44");
     writer.write_cstring_param_block(&f);
     writer.into_inner()
 }
 
-fn push_owned_part(params: &mut old::Params, owner_part_id: i32) {
+fn push_owned_part(params: &mut common::Params, owner_part_id: i32) {
     params.push_bool("ISNOTACCESIBLE", true);
     params.push("OWNERPARTID", owner_part_id.to_string());
 }
 fn format_angle(angle: f64) -> String {
-    format!("{:.3}", old::normalize_angle(angle))
+    format!("{:.3}", common::normalize_angle(angle))
 }
 fn text_orientation_from_rotation(rotation: f64) -> u8 {
-    ((old::normalize_angle(rotation) / 90.0).round() as i32).rem_euclid(4) as u8
+    ((common::normalize_angle(rotation) / 90.0).round() as i32).rem_euclid(4) as u8
 }
 fn pin_orientation_from_easyeda_rotation(rotation: f64) -> u8 {
-    ((old::normalize_angle(rotation) / 90.0).round() as i32).rem_euclid(4) as u8
+    ((common::normalize_angle(rotation) / 90.0).round() as i32).rem_euclid(4) as u8
 }
 fn pin_inner_location_from_easyeda(
     x_units: f64,
@@ -1280,7 +1290,7 @@ fn pin_inner_location_from_easyeda(
     length_units: f64,
     rotation: f64,
 ) -> (f64, f64) {
-    let angle = old::normalize_angle(rotation);
+    let angle = common::normalize_angle(rotation);
     let (dx_units, dy_units) = if !(45.0..315.0).contains(&angle) {
         (length_units, 0.0)
     } else if angle < 135.0 {
@@ -1322,34 +1332,34 @@ fn arc_from_raw(raw: &ArcRaw) -> Option<Arc> {
         std::mem::swap(&mut start_angle, &mut end_angle);
     }
     Some(Arc {
-        center: old::CoordPoint::from_symbol_units(cx, cy),
-        radius_raw: old::raw_from_symbol_units(radius),
+        center: common::CoordPoint::from_symbol_units(cx, cy),
+        radius_raw: common::raw_from_symbol_units(radius),
         start_angle,
         end_angle,
-        color_bgr: old::RED_BGR,
+        color_bgr: common::RED_BGR,
         line_width_index: GRAPHIC_LINE_WIDTH_INDEX,
         owner_part_id: raw.owner_part_id,
     })
 }
 
 fn point_angle_degrees(cx: f64, cy: f64, x: f64, y: f64) -> f64 {
-    old::normalize_angle((y - cy).atan2(x - cx).to_degrees())
+    common::normalize_angle((y - cy).atan2(x - cx).to_degrees())
 }
 fn angle_lies_on_ccw_path(start: f64, mid: f64, end: f64) -> bool {
     angle_delta_ccw(start, mid) <= angle_delta_ccw(start, end) + 1e-6
 }
 fn angle_delta_ccw(start: f64, end: f64) -> f64 {
-    let mut delta = old::normalize_angle(end) - old::normalize_angle(start);
+    let mut delta = common::normalize_angle(end) - common::normalize_angle(start);
     if delta < 0.0 {
         delta += 360.0;
     }
     delta
 }
 fn stable_unique_id(name: &str, salt: &str) -> String {
-    old::stable_unique_id(name, salt)
+    common::stable_unique_id(name, salt)
 }
 fn normalize_component_name(name: &str) -> String {
-    old::normalize_component_name(name)
+    common::normalize_component_name(name)
 }
 fn pin_conglomerate(pin: &Pin) -> u8 {
     let mut flags = pin.orientation & 0x03;
@@ -1370,7 +1380,7 @@ struct PointUnits {
 #[derive(Debug, Clone)]
 struct PartRaw {
     owner_part_id: i32,
-    bounds: old::OptionalBounds,
+    bounds: common::OptionalBounds,
     pins: Vec<PinRaw>,
     rectangles: Vec<RectRaw>,
     polylines: Vec<PolylineRaw>,
@@ -1379,8 +1389,8 @@ struct PartRaw {
     labels: Vec<TextRaw>,
 }
 impl PartRaw {
-    fn new(owner_part_id: i32, declared_bounds: Option<old::Bounds>) -> Self {
-        let mut bounds = old::OptionalBounds::default();
+    fn new(owner_part_id: i32, declared_bounds: Option<common::Bounds>) -> Self {
+        let mut bounds = common::OptionalBounds::default();
         if let Some(bounds_decl) = declared_bounds {
             bounds.update_x(bounds_decl.min_x_units, bounds_decl.max_x_units);
             bounds.update_y(bounds_decl.min_y_units, bounds_decl.max_y_units);
@@ -1458,7 +1468,7 @@ struct TextRaw {
 struct Pin {
     designator: String,
     name: String,
-    location: old::CoordPoint,
+    location: common::CoordPoint,
     length_raw: i64,
     orientation: u8,
     show_name: bool,
@@ -1469,8 +1479,8 @@ struct Pin {
 }
 #[derive(Debug)]
 struct Rectangle {
-    corner1: old::CoordPoint,
-    corner2: old::CoordPoint,
+    corner1: common::CoordPoint,
+    corner2: common::CoordPoint,
     color_bgr: i32,
     fill_color_bgr: i32,
     is_filled: bool,
@@ -1480,14 +1490,14 @@ struct Rectangle {
 }
 #[derive(Debug)]
 struct Polyline {
-    points: Vec<old::CoordPoint>,
+    points: Vec<common::CoordPoint>,
     color_bgr: i32,
     line_width_index: i32,
     owner_part_id: i32,
 }
 #[derive(Debug)]
 struct Arc {
-    center: old::CoordPoint,
+    center: common::CoordPoint,
     radius_raw: i64,
     start_angle: f64,
     end_angle: f64,
@@ -1497,7 +1507,7 @@ struct Arc {
 }
 #[derive(Debug)]
 struct Ellipse {
-    center: old::CoordPoint,
+    center: common::CoordPoint,
     radius_x_raw: i64,
     radius_y_raw: i64,
     color_bgr: i32,
@@ -1510,7 +1520,7 @@ struct Ellipse {
 #[derive(Debug)]
 struct Label {
     text: String,
-    location: old::CoordPoint,
+    location: common::CoordPoint,
     orientation: u8,
     color_bgr: i32,
     owner_part_id: i32,

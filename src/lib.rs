@@ -4,7 +4,6 @@ pub mod error;
 pub mod footprint;
 pub mod lceda;
 pub mod pcblib;
-#[path = "schlib_new.rs"]
 pub mod schlib;
 pub mod util;
 pub mod workflow;
