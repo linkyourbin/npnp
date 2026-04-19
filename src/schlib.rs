@@ -12,9 +12,9 @@ use crate::util::{nested_string, value_to_string};
 const RAW_PER_DXP_UNIT: f64 = 100_000.0;
 const GRID_UNITS: f64 = 10.0;
 const PIN_LENGTH_UNITS: f64 = 20.0;
-const BORDER_BGR: i32 = 0x8080F0;
-const FILL_BGR: i32 = 0xE0FFFF;
-const RED_BGR: i32 = 0x0000FF;
+pub(super) const BORDER_BGR: i32 = 0x8080F0;
+pub(super) const FILL_BGR: i32 = 0xE0FFFF;
+pub(super) const RED_BGR: i32 = 0x0000FF;
 const BLUE_BGR: i32 = 0xFF0000;
 
 pub fn write_schlib_from_payload(
@@ -82,10 +82,13 @@ fn build_component(payload: &Value, component_name: &str) -> Result<Component> {
                 if parent.trim().is_empty() || key.trim().is_empty() {
                     continue;
                 }
-                attr_by_parent
-                    .entry(parent.trim().to_string())
-                    .or_default()
-                    .insert(key.trim().to_ascii_uppercase(), row_string(row, 4));
+                let key_upper = key.trim().to_ascii_uppercase();
+                let attrs = attr_by_parent.entry(parent.trim().to_string()).or_default();
+                attrs.insert(key_upper.clone(), row_string(row, 4));
+                attrs.insert(
+                    format!("{key_upper}__VISIBLE"),
+                    row_bool(row, 6, true).to_string(),
+                );
             }
             "RECT" => {
                 let rect = RectRaw {
@@ -185,6 +188,8 @@ fn build_component(payload: &Value, component_name: &str) -> Result<Component> {
         let name = safe_attr(attrs, "NAME")
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| designator.clone());
+        let show_name = safe_attr_flag(attrs, "NAME", !name.trim().is_empty());
+        let show_designator = safe_attr_flag(attrs, "NUMBER", true);
         component.pins.push(Pin {
             designator,
             name,
@@ -195,8 +200,8 @@ fn build_component(payload: &Value, component_name: &str) -> Result<Component> {
                 10.0
             }),
             orientation: pin_orientation_from_rotation(pin.rotation_degrees),
-            show_name: true,
-            show_designator: true,
+            show_name,
+            show_designator,
             color_bgr: RED_BGR,
         });
     }
@@ -204,7 +209,7 @@ fn build_component(payload: &Value, component_name: &str) -> Result<Component> {
     Ok(component)
 }
 
-fn parse_easyeda_rows(payload: &Value) -> Result<Vec<Vec<Value>>> {
+pub(super) fn parse_easyeda_rows(payload: &Value) -> Result<Vec<Vec<Value>>> {
     let data_str = nested_string(payload, &["result", "dataStr"])
         .or_else(|| nested_string(payload, &["dataStr"]))
         .ok_or_else(|| AppError::InvalidResponse("symbol payload has no dataStr".to_string()))?;
@@ -226,7 +231,7 @@ fn parse_easyeda_rows(payload: &Value) -> Result<Vec<Vec<Value>>> {
     }
     Ok(rows)
 }
-fn layout_pins(
+pub(super) fn layout_pins(
     pins: &[PinRaw],
     attr_by_parent: &HashMap<String, HashMap<String, String>>,
 ) -> (Vec<PlacedPin>, PlacedRect) {
@@ -327,6 +332,8 @@ fn layout_pins(
             let name = safe_attr(attrs, "NAME")
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| designator.clone());
+            let show_name = safe_attr_flag(attrs, "NAME", !name.trim().is_empty());
+            let show_designator = safe_attr_flag(attrs, "NUMBER", true);
             placed.push(PlacedPin {
                 designator,
                 name: name.clone(),
@@ -334,7 +341,8 @@ fn layout_pins(
                 y_units,
                 length_units: PIN_LENGTH_UNITS,
                 rotation_degrees: side_rotation(side),
-                show_name: !name.trim().is_empty(),
+                show_name,
+                show_designator,
             });
         }
     }
@@ -534,7 +542,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
 
     writer.into_inner()
 }
-fn part_bounds_from_row(row: &[Value]) -> Option<Bounds> {
+pub(super) fn part_bounds_from_row(row: &[Value]) -> Option<Bounds> {
     let bbox = row.get(2)?.get("BBOX")?.as_array()?;
     if bbox.len() < 4 {
         return None;
@@ -551,7 +559,10 @@ fn part_bounds_from_row(row: &[Value]) -> Option<Bounds> {
     })
 }
 
-fn safe_attr<'a>(attrs: Option<&'a HashMap<String, String>>, key: &str) -> Option<&'a str> {
+pub(super) fn safe_attr<'a>(
+    attrs: Option<&'a HashMap<String, String>>,
+    key: &str,
+) -> Option<&'a str> {
     attrs?
         .get(&key.to_ascii_uppercase())
         .map(String::as_str)
@@ -559,15 +570,34 @@ fn safe_attr<'a>(attrs: Option<&'a HashMap<String, String>>, key: &str) -> Optio
         .filter(|value| !value.is_empty())
 }
 
-fn row_string(row: &[Value], index: usize) -> String {
+pub(super) fn safe_attr_flag(
+    attrs: Option<&HashMap<String, String>>,
+    key: &str,
+    default: bool,
+) -> bool {
+    let Some(attrs) = attrs else {
+        return default;
+    };
+    let visible_key = format!("{}__VISIBLE", key.to_ascii_uppercase());
+    attrs
+        .get(&visible_key)
+        .and_then(|value| parse_boolish(value))
+        .unwrap_or(default)
+}
+
+pub(super) fn row_string(row: &[Value], index: usize) -> String {
     row.get(index).and_then(value_to_string).unwrap_or_default()
 }
 
-fn row_f64(row: &[Value], index: usize, default: f64) -> f64 {
+pub(super) fn row_f64(row: &[Value], index: usize, default: f64) -> f64 {
     row.get(index).and_then(value_as_f64).unwrap_or(default)
 }
 
-fn value_as_f64(value: &Value) -> Option<f64> {
+pub(super) fn row_bool(row: &[Value], index: usize, default: bool) -> bool {
+    row.get(index).and_then(value_as_bool).unwrap_or(default)
+}
+
+pub(super) fn value_as_f64(value: &Value) -> Option<f64> {
     match value {
         Value::Number(number) => number.as_f64(),
         Value::String(text) => text.trim().parse().ok(),
@@ -576,7 +606,24 @@ fn value_as_f64(value: &Value) -> Option<f64> {
     }
 }
 
-fn normalize_angle(rotation_degrees: f64) -> f64 {
+pub(super) fn value_as_bool(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(flag) => Some(*flag),
+        Value::Number(number) => number.as_f64().map(|value| value.abs() > f64::EPSILON),
+        Value::String(text) => parse_boolish(text),
+        _ => None,
+    }
+}
+
+fn parse_boolish(text: &str) -> Option<bool> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "true" | "t" | "1" | "yes" | "y" => Some(true),
+        "false" | "f" | "0" | "no" | "n" => Some(false),
+        _ => None,
+    }
+}
+
+pub(super) fn normalize_angle(rotation_degrees: f64) -> f64 {
     if !rotation_degrees.is_finite() {
         return 0.0;
     }
@@ -639,7 +686,7 @@ fn side_rotation(side: PinSide) -> f64 {
     }
 }
 
-fn pin_orientation_from_rotation(rotation_degrees: f64) -> u8 {
+pub(super) fn pin_orientation_from_rotation(rotation_degrees: f64) -> u8 {
     (((normalize_angle(rotation_degrees + 180.0) / 90.0).round() as i32).rem_euclid(4)) as u8
 }
 
@@ -654,7 +701,7 @@ fn pin_conglomerate(pin: &Pin) -> u8 {
     flags
 }
 
-fn normalize_component_name(component_name: &str) -> String {
+pub(super) fn normalize_component_name(component_name: &str) -> String {
     let trimmed = component_name.trim();
     if trimmed.is_empty() {
         "component".to_string()
@@ -663,7 +710,7 @@ fn normalize_component_name(component_name: &str) -> String {
     }
 }
 
-fn section_key_from_name(name: &str) -> String {
+pub(super) fn section_key_from_name(name: &str) -> String {
     if name.is_empty() {
         return "_".to_string();
     }
@@ -673,7 +720,7 @@ fn section_key_from_name(name: &str) -> String {
         .collect()
 }
 
-fn stable_unique_id(name: &str, salt: &str) -> String {
+pub(super) fn stable_unique_id(name: &str, salt: &str) -> String {
     const ALPHABET: &[u8; 26] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let mut hash: u64 = 0xCBF29CE484222325;
     for byte in name.bytes().chain([b'|']).chain(salt.bytes()) {
@@ -689,7 +736,7 @@ fn stable_unique_id(name: &str, salt: &str) -> String {
     id
 }
 
-fn raw_from_symbol_units(value: f64) -> i64 {
+pub(super) fn raw_from_symbol_units(value: f64) -> i64 {
     (value * RAW_PER_DXP_UNIT).round() as i64
 }
 
@@ -697,7 +744,7 @@ fn dxp_parts(raw: i64) -> (i64, i64) {
     (raw / 100_000, raw % 100_000)
 }
 
-fn dxp_i16(raw: i64) -> i16 {
+pub(super) fn dxp_i16(raw: i64) -> i16 {
     dxp_parts(raw).0.clamp(i16::MIN as i64, i16::MAX as i64) as i16
 }
 
@@ -716,12 +763,12 @@ fn encode_ansi_lossy(text: &str) -> Vec<u8> {
 }
 
 #[derive(Debug, Clone)]
-struct PinRaw {
-    id: String,
-    x_units: f64,
-    y_units: f64,
-    length_units: f64,
-    rotation_degrees: f64,
+pub(super) struct PinRaw {
+    pub(super) id: String,
+    pub(super) x_units: f64,
+    pub(super) y_units: f64,
+    pub(super) length_units: f64,
+    pub(super) rotation_degrees: f64,
 }
 #[derive(Debug, Clone, Copy)]
 struct RectRaw {
@@ -731,46 +778,47 @@ struct RectRaw {
     y2_units: f64,
 }
 #[derive(Debug, Clone)]
-struct PlacedPin {
-    designator: String,
-    name: String,
-    x_units: f64,
-    y_units: f64,
-    length_units: f64,
-    rotation_degrees: f64,
-    show_name: bool,
+pub(super) struct PlacedPin {
+    pub(super) designator: String,
+    pub(super) name: String,
+    pub(super) x_units: f64,
+    pub(super) y_units: f64,
+    pub(super) length_units: f64,
+    pub(super) rotation_degrees: f64,
+    pub(super) show_name: bool,
+    pub(super) show_designator: bool,
 }
 #[derive(Debug, Default, Clone, Copy)]
-struct PlacedRect {
-    x1_units: f64,
-    y1_units: f64,
-    x2_units: f64,
-    y2_units: f64,
+pub(super) struct PlacedRect {
+    pub(super) x1_units: f64,
+    pub(super) y1_units: f64,
+    pub(super) x2_units: f64,
+    pub(super) y2_units: f64,
 }
 impl PlacedRect {
-    fn width_units(self) -> f64 {
+    pub(super) fn width_units(self) -> f64 {
         self.x2_units - self.x1_units
     }
-    fn height_units(self) -> f64 {
+    pub(super) fn height_units(self) -> f64 {
         self.y2_units - self.y1_units
     }
 }
 #[derive(Debug, Clone, Copy)]
-struct Bounds {
-    min_x_units: f64,
-    max_x_units: f64,
-    min_y_units: f64,
-    max_y_units: f64,
+pub(super) struct Bounds {
+    pub(super) min_x_units: f64,
+    pub(super) max_x_units: f64,
+    pub(super) min_y_units: f64,
+    pub(super) max_y_units: f64,
 }
 #[derive(Debug, Default, Clone, Copy)]
-struct OptionalBounds {
-    min_x_units: Option<f64>,
-    max_x_units: Option<f64>,
-    min_y_units: Option<f64>,
-    max_y_units: Option<f64>,
+pub(super) struct OptionalBounds {
+    pub(super) min_x_units: Option<f64>,
+    pub(super) max_x_units: Option<f64>,
+    pub(super) min_y_units: Option<f64>,
+    pub(super) max_y_units: Option<f64>,
 }
 impl OptionalBounds {
-    fn update_x(&mut self, min_x_units: f64, max_x_units: f64) {
+    pub(super) fn update_x(&mut self, min_x_units: f64, max_x_units: f64) {
         self.min_x_units = Some(
             self.min_x_units
                 .map_or(min_x_units, |value| value.min(min_x_units)),
@@ -780,7 +828,7 @@ impl OptionalBounds {
                 .map_or(max_x_units, |value| value.max(max_x_units)),
         );
     }
-    fn update_y(&mut self, min_y_units: f64, max_y_units: f64) {
+    pub(super) fn update_y(&mut self, min_y_units: f64, max_y_units: f64) {
         self.min_y_units = Some(
             self.min_y_units
                 .map_or(min_y_units, |value| value.min(min_y_units)),
@@ -790,7 +838,7 @@ impl OptionalBounds {
                 .map_or(max_y_units, |value| value.max(max_y_units)),
         );
     }
-    fn finish(self) -> Option<Bounds> {
+    pub(super) fn finish(self) -> Option<Bounds> {
         Some(Bounds {
             min_x_units: self.min_x_units?,
             max_x_units: self.max_x_units?,
@@ -800,12 +848,12 @@ impl OptionalBounds {
     }
 }
 #[derive(Debug, Clone, Copy)]
-struct CoordPoint {
-    x_raw: i64,
-    y_raw: i64,
+pub(super) struct CoordPoint {
+    pub(super) x_raw: i64,
+    pub(super) y_raw: i64,
 }
 impl CoordPoint {
-    fn from_symbol_units(x_units: f64, y_units: f64) -> Self {
+    pub(super) fn from_symbol_units(x_units: f64, y_units: f64) -> Self {
         Self {
             x_raw: raw_from_symbol_units(x_units),
             y_raw: raw_from_symbol_units(y_units),
@@ -860,22 +908,22 @@ impl PinSide {
     }
 }
 #[derive(Debug, Default)]
-struct Params(Vec<(String, String)>);
+pub(super) struct Params(Vec<(String, String)>);
 impl Params {
-    fn push(&mut self, key: impl Into<String>, value: impl Into<String>) {
+    pub(super) fn push(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.0.push((key.into(), value.into()));
     }
-    fn push_non_zero(&mut self, key: &str, value: i32) {
+    pub(super) fn push_non_zero(&mut self, key: &str, value: i32) {
         if value != 0 {
             self.push(key, value.to_string());
         }
     }
-    fn push_bool(&mut self, key: &str, value: bool) {
+    pub(super) fn push_bool(&mut self, key: &str, value: bool) {
         if value {
             self.push(key, "T");
         }
     }
-    fn push_coord(&mut self, key: &str, raw: i64) {
+    pub(super) fn push_coord(&mut self, key: &str, raw: i64) {
         let (dxp_value, frac_value) = dxp_parts(raw);
         if dxp_value != 0 {
             self.push(key, dxp_value.to_string());
@@ -896,26 +944,26 @@ impl Params {
     }
 }
 #[derive(Debug, Default)]
-struct BinaryWriter {
+pub(super) struct BinaryWriter {
     data: Vec<u8>,
 }
 impl BinaryWriter {
-    fn into_inner(self) -> Vec<u8> {
+    pub(super) fn into_inner(self) -> Vec<u8> {
         self.data
     }
-    fn write_u8(&mut self, value: u8) {
+    pub(super) fn write_u8(&mut self, value: u8) {
         self.data.push(value);
     }
-    fn write_i16(&mut self, value: i16) {
+    pub(super) fn write_i16(&mut self, value: i16) {
         self.data.extend_from_slice(&value.to_le_bytes());
     }
-    fn write_i32(&mut self, value: i32) {
+    pub(super) fn write_i32(&mut self, value: i32) {
         self.data.extend_from_slice(&value.to_le_bytes());
     }
     fn write_u32(&mut self, value: u32) {
         self.data.extend_from_slice(&value.to_le_bytes());
     }
-    fn write_pascal_short_string(&mut self, value: &str) {
+    pub(super) fn write_pascal_short_string(&mut self, value: &str) {
         let bytes = encode_ansi_lossy(value);
         let byte_count = bytes.len().min(255);
         self.write_u8(byte_count as u8);
@@ -925,17 +973,17 @@ impl BinaryWriter {
         self.data.extend_from_slice(&encode_ansi_lossy(value));
         self.write_u8(0);
     }
-    fn write_block(&mut self, flags: u8, serializer: impl FnOnce(&mut Self)) {
+    pub(super) fn write_block(&mut self, flags: u8, serializer: impl FnOnce(&mut Self)) {
         let mut child = Self::default();
         serializer(&mut child);
         let child_data = child.into_inner();
         self.write_u32(((flags as u32) << 24) | child_data.len() as u32);
         self.data.extend_from_slice(&child_data);
     }
-    fn write_string_block(&mut self, value: &str) {
+    pub(super) fn write_string_block(&mut self, value: &str) {
         self.write_block(0, |writer| writer.write_pascal_short_string(value));
     }
-    fn write_cstring_param_block(&mut self, params: &Params) {
+    pub(super) fn write_cstring_param_block(&mut self, params: &Params) {
         let text = params.as_string();
         self.write_block(0, |writer| writer.write_cstring(&text));
     }

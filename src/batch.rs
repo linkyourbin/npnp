@@ -53,7 +53,7 @@ pub async fn export_batch(client: &LcedaClient, options: BatchOptions) -> Result
     let mut pending = Vec::new();
     let mut skipped = 0usize;
     for id in ids {
-        if completed.contains(&id) {
+        if !options.force && completed.contains(&id) {
             skipped += 1;
         } else {
             pending.push(id);
