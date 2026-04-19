@@ -175,16 +175,31 @@ Example:
 cargo run --quiet --bin syft -- batch --input ids.txt --output batch_out --schlib --pcblib --parallel 4 --continue-on-error --force
 ```
 
+Merged library example:
+
+```powershell
+cargo run --quiet --bin syft -- batch --input ids.txt --output batch_out --merge --library-name MyLib --schlib --pcblib --continue-on-error
+```
+
+This writes:
+
+```text
+batch_out/MyLib.SchLib
+batch_out/MyLib.PcbLib
+```
+
 Important options:
 
 - `--schlib` export only schematic libraries
 - `--pcblib` export only PCB libraries
 - `--full` export both targets
+- `--merge` write one merged `.SchLib` and/or `.PcbLib` instead of one file per component
+- `--library-name <NAME>` set the merged output filename prefix
 - `--parallel <N>` number of concurrent export jobs
 - `--continue-on-error` keep going if one ID fails
 - `--force` ignore checkpoint skips and overwrite outputs
 
-Batch output layout:
+Non-merge batch output layout:
 
 ```text
 batch_out/
@@ -194,6 +209,14 @@ batch_out/
 ```
 
 `.checkpoint` stores completed IDs so later runs can skip already exported parts unless `--force` is used.
+
+Merge batch output layout:
+
+```text
+batch_out/
+  MyLib.SchLib
+  MyLib.PcbLib
+```
 
 ## Output Notes
 

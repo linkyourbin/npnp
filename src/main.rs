@@ -139,6 +139,8 @@ async fn run() -> Result<()> {
             schlib,
             pcblib,
             full,
+            merge,
+            library_name,
             parallel,
             continue_on_error,
             force,
@@ -151,6 +153,8 @@ async fn run() -> Result<()> {
                     schlib,
                     pcblib,
                     full,
+                    merge,
+                    library_name,
                     parallel,
                     continue_on_error,
                     force,
@@ -163,6 +167,9 @@ async fn run() -> Result<()> {
             );
             if !summary.failed_ids.is_empty() {
                 println!("Failed IDs: {}", summary.failed_ids.join(", "));
+            }
+            for path in &summary.generated_files {
+                println!("Generated: {}", path.display());
             }
             println!("Output directory: {}", summary.output.display());
         }

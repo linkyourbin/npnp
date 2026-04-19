@@ -95,6 +95,10 @@ pub enum Commands {
         pcblib: bool,
         #[arg(long)]
         full: bool,
+        #[arg(long)]
+        merge: bool,
+        #[arg(long)]
+        library_name: Option<String>,
         #[arg(long, default_value_t = 4)]
         parallel: usize,
         #[arg(long)]

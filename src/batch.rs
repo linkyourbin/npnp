@@ -8,8 +8,13 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::error::{AppError, Result};
-use crate::lceda::LcedaClient;
-use crate::workflow::{export_pcblib, export_schlib};
+use crate::lceda::{LcedaClient, SearchItem};
+use crate::pcblib::{PcbLibrary, write_pcblib};
+use crate::schlib::{Component, write_schlib_library};
+use crate::util::sanitize_filename;
+use crate::workflow::{
+    build_pcblib_library_for_item, build_schlib_component_for_item, export_pcblib, export_schlib,
+};
 
 #[derive(Debug, Clone)]
 pub struct BatchOptions {
@@ -18,6 +23,8 @@ pub struct BatchOptions {
     pub schlib: bool,
     pub pcblib: bool,
     pub full: bool,
+    pub merge: bool,
+    pub library_name: Option<String>,
     pub parallel: usize,
     pub continue_on_error: bool,
     pub force: bool,
@@ -31,10 +38,15 @@ pub struct BatchSummary {
     pub failed: usize,
     pub failed_ids: Vec<String>,
     pub output: PathBuf,
+    pub generated_files: Vec<PathBuf>,
 }
 
 pub async fn export_batch(client: &LcedaClient, options: BatchOptions) -> Result<BatchSummary> {
     let targets = ExportTargets::resolve(&options)?;
+    if options.merge {
+        return export_batch_merged(client, options, targets).await;
+    }
+
     let options = Arc::new(options);
 
     fs::create_dir_all(&options.output)?;
@@ -67,6 +79,7 @@ pub async fn export_batch(client: &LcedaClient, options: BatchOptions) -> Result
         failed: 0,
         failed_ids: Vec::new(),
         output: options.output.clone(),
+        generated_files: Vec::new(),
     };
 
     if pending.is_empty() {
@@ -121,6 +134,175 @@ impl ExportTargets {
 
         Ok(Self { schlib, pcblib })
     }
+}
+
+#[derive(Debug)]
+struct MergeArtifacts {
+    schlib_component: Option<Component>,
+    pcblib_library: Option<PcbLibrary>,
+}
+
+async fn export_batch_merged(
+    client: &LcedaClient,
+    options: BatchOptions,
+    targets: ExportTargets,
+) -> Result<BatchSummary> {
+    fs::create_dir_all(&options.output)?;
+
+    let input = fs::read_to_string(&options.input)?;
+    let ids = parse_lcsc_ids(&input);
+    if ids.is_empty() {
+        return Err(AppError::Other(
+            "no valid LCSC IDs found in batch input".to_string(),
+        ));
+    }
+
+    let mut summary = BatchSummary {
+        total: ids.len(),
+        skipped: 0,
+        success: 0,
+        failed: 0,
+        failed_ids: Vec::new(),
+        output: options.output.clone(),
+        generated_files: Vec::new(),
+    };
+
+    let library_name = resolve_library_name(&options);
+    let mut used_names = HashSet::new();
+    let mut schlib_components = Vec::new();
+    let mut pcblib_library = PcbLibrary::default();
+    let mut first_error = None;
+
+    for id in ids {
+        let result = export_merged_component(client, targets, &id, &mut used_names).await;
+        match result {
+            Ok(artifacts) => {
+                if let Some(component) = artifacts.schlib_component {
+                    schlib_components.push(component);
+                }
+                if let Some(library) = artifacts.pcblib_library {
+                    append_pcblib_library(&mut pcblib_library, library);
+                }
+                summary.success += 1;
+                println!("OK {id}");
+            }
+            Err(err) => {
+                summary.failed += 1;
+                summary.failed_ids.push(id.clone());
+                eprintln!("FAILED {id}: {err}");
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+                if !options.continue_on_error {
+                    return Err(first_error.unwrap());
+                }
+            }
+        }
+    }
+
+    let mut wrote_any = false;
+    if targets.schlib && !schlib_components.is_empty() {
+        let path = options
+            .output
+            .join(format!("{}.SchLib", sanitize_filename(&library_name)));
+        write_schlib_library(&schlib_components, &path)?;
+        summary.generated_files.push(path);
+        wrote_any = true;
+    }
+    if targets.pcblib && !pcblib_library.components.is_empty() {
+        let path = options
+            .output
+            .join(format!("{}.PcbLib", sanitize_filename(&library_name)));
+        write_pcblib(&pcblib_library, &path)?;
+        summary.generated_files.push(path);
+        wrote_any = true;
+    }
+
+    if !wrote_any {
+        return Err(first_error.unwrap_or_else(|| {
+            AppError::Other("no components exported successfully for merged batch".to_string())
+        }));
+    }
+
+    Ok(summary)
+}
+
+async fn export_merged_component(
+    client: &LcedaClient,
+    targets: ExportTargets,
+    lcsc_id: &str,
+    used_names: &mut HashSet<String>,
+) -> Result<MergeArtifacts> {
+    let item = client.select_item(lcsc_id, 1).await?;
+    let component_name = merged_component_name(&item, lcsc_id, used_names);
+
+    let schlib_component = if targets.schlib {
+        Some(build_schlib_component_for_item(client, &item, &component_name).await?)
+    } else {
+        None
+    };
+
+    let pcblib_library = if targets.pcblib {
+        Some(build_pcblib_library_for_item(client, &item, &component_name).await?)
+    } else {
+        None
+    };
+
+    Ok(MergeArtifacts {
+        schlib_component,
+        pcblib_library,
+    })
+}
+
+fn merged_component_name(
+    item: &SearchItem,
+    lcsc_id: &str,
+    used_names: &mut HashSet<String>,
+) -> String {
+    let base = item.display_name().trim();
+    let base = if base.is_empty() { lcsc_id } else { base };
+    let normalized_base = base.to_ascii_lowercase();
+    if used_names.insert(normalized_base) {
+        return base.to_string();
+    }
+
+    let with_id = format!("{base}_{lcsc_id}");
+    let normalized_with_id = with_id.to_ascii_lowercase();
+    if used_names.insert(normalized_with_id) {
+        return with_id;
+    }
+
+    let mut index = 2usize;
+    loop {
+        let candidate = format!("{base}_{lcsc_id}_{index}");
+        if used_names.insert(candidate.to_ascii_lowercase()) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn append_pcblib_library(target: &mut PcbLibrary, source: PcbLibrary) {
+    target.components.extend(source.components);
+    target.models.extend(source.models);
+}
+
+fn resolve_library_name(options: &BatchOptions) -> String {
+    if let Some(name) = options.library_name.as_deref() {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    options
+        .input
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("MergedLib")
+        .to_string()
 }
 
 async fn run_sequential(
@@ -286,7 +468,8 @@ fn parse_lcsc_ids(text: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_lcsc_ids;
+    use super::{BatchOptions, parse_lcsc_ids, resolve_library_name};
+    use std::path::PathBuf;
 
     #[test]
     fn parse_ids_deduplicates_and_preserves_order() {
@@ -298,5 +481,23 @@ mod tests {
     fn parse_ids_ignores_invalid_matches() {
         let ids = parse_lcsc_ids("C abc c-1 test");
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn resolve_library_name_defaults_to_input_stem() {
+        let options = BatchOptions {
+            input: PathBuf::from("ids.txt"),
+            output: PathBuf::from("out"),
+            schlib: true,
+            pcblib: false,
+            full: false,
+            merge: true,
+            library_name: None,
+            parallel: 1,
+            continue_on_error: false,
+            force: false,
+        };
+
+        assert_eq!(resolve_library_name(&options), "ids");
     }
 }

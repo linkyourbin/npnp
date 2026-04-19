@@ -8,8 +8,11 @@ use serde_json::{Value, to_string_pretty};
 use crate::error::{AppError, Result};
 use crate::footprint::build_pcblib_from_payload;
 use crate::lceda::{LcedaClient, SearchItem};
-use crate::pcblib::write_pcblib;
-use crate::schlib::{SchlibMetadata, SchlibParameter, write_schlib_from_payload_with_metadata};
+use crate::pcblib::{PcbLibrary, write_pcblib};
+use crate::schlib::{
+    Component, SchlibMetadata, SchlibParameter, build_component_from_payload_with_metadata,
+    write_schlib,
+};
 use crate::util::{nested_string, sanitize_filename, split_obj_and_mtl, value_to_string};
 
 #[derive(Debug, Serialize)]
@@ -108,31 +111,23 @@ pub async fn export_easyeda_sources(
     Ok(exported)
 }
 
-pub async fn export_pcblib(
-    client: &LcedaClient,
-    item: &SearchItem,
-    out_dir: &Path,
-    force: bool,
-) -> Result<PathBuf> {
-    fs::create_dir_all(out_dir)?;
-    let footprint_uuid = item
-        .footprint_uuid()
-        .ok_or(AppError::MissingSymbolOrFootprint)?;
-    let footprint_data = client.component_detail(&footprint_uuid).await?;
-    let component_name = if item.display_name().trim().is_empty() {
-        nested_string(&footprint_data, &["result", "display_title"])
+fn resolved_component_name(item: &SearchItem, payload: &Value) -> String {
+    if item.display_name().trim().is_empty() {
+        nested_string(payload, &["result", "display_title"])
             .filter(|name| !name.trim().is_empty())
             .unwrap_or_else(|| item.display_name().to_string())
     } else {
         item.display_name().to_string()
-    };
-    let out_file = out_dir.join(format!("{}.PcbLib", sanitize_filename(&component_name)));
-    if out_file.exists() && !force {
-        return Ok(out_file);
     }
+}
 
+async fn load_step_bytes_for_pcblib(
+    client: &LcedaClient,
+    item: &SearchItem,
+    footprint_data: &Value,
+) -> Option<Vec<u8>> {
     let mut model_candidates = Vec::new();
-    if let Some(model_uuid) = nested_string(&footprint_data, &["result", "model_3d", "uri"])
+    if let Some(model_uuid) = nested_string(footprint_data, &["result", "model_3d", "uri"])
         .filter(|uuid| !uuid.trim().is_empty())
     {
         model_candidates.push(model_uuid);
@@ -160,16 +155,76 @@ pub async fn export_pcblib(
         }
     }
 
-    let mut step_bytes = None;
     for model_uuid in model_candidates {
         if let Ok(bytes) = client.download_step_bytes(&model_uuid).await {
-            step_bytes = Some(bytes);
-            break;
+            return Some(bytes);
         }
     }
 
+    None
+}
+
+async fn build_pcblib_library_from_detail(
+    client: &LcedaClient,
+    item: &SearchItem,
+    footprint_data: &Value,
+    component_name: &str,
+) -> Result<PcbLibrary> {
+    let step_bytes = load_step_bytes_for_pcblib(client, item, footprint_data).await;
+    build_pcblib_from_payload(footprint_data, component_name, step_bytes.as_deref())
+}
+
+fn build_schlib_component_from_detail(
+    item: &SearchItem,
+    symbol_data: &Value,
+    component_name: &str,
+) -> Result<Component> {
+    let metadata = build_schlib_metadata(item, symbol_data);
+    build_component_from_payload_with_metadata(symbol_data, component_name, &metadata)
+}
+
+pub async fn build_pcblib_library_for_item(
+    client: &LcedaClient,
+    item: &SearchItem,
+    component_name: &str,
+) -> Result<PcbLibrary> {
+    let footprint_uuid = item
+        .footprint_uuid()
+        .ok_or(AppError::MissingSymbolOrFootprint)?;
+    let footprint_data = client.component_detail(&footprint_uuid).await?;
+    build_pcblib_library_from_detail(client, item, &footprint_data, component_name).await
+}
+
+pub async fn build_schlib_component_for_item(
+    client: &LcedaClient,
+    item: &SearchItem,
+    component_name: &str,
+) -> Result<Component> {
+    let symbol_uuid = item
+        .symbol_uuid()
+        .ok_or(AppError::MissingSymbolOrFootprint)?;
+    let symbol_data = client.component_detail(&symbol_uuid).await?;
+    build_schlib_component_from_detail(item, &symbol_data, component_name)
+}
+pub async fn export_pcblib(
+    client: &LcedaClient,
+    item: &SearchItem,
+    out_dir: &Path,
+    force: bool,
+) -> Result<PathBuf> {
+    fs::create_dir_all(out_dir)?;
+    let footprint_uuid = item
+        .footprint_uuid()
+        .ok_or(AppError::MissingSymbolOrFootprint)?;
+    let footprint_data = client.component_detail(&footprint_uuid).await?;
+    let component_name = resolved_component_name(item, &footprint_data);
+    let out_file = out_dir.join(format!("{}.PcbLib", sanitize_filename(&component_name)));
+    if out_file.exists() && !force {
+        return Ok(out_file);
+    }
+
     let library =
-        build_pcblib_from_payload(&footprint_data, &component_name, step_bytes.as_deref())?;
+        build_pcblib_library_from_detail(client, item, &footprint_data, &component_name).await?;
     write_pcblib(&library, &out_file)?;
     Ok(out_file)
 }
@@ -185,20 +240,14 @@ pub async fn export_schlib(
         .symbol_uuid()
         .ok_or(AppError::MissingSymbolOrFootprint)?;
     let symbol_data = client.component_detail(&symbol_uuid).await?;
-    let component_name = if item.display_name().trim().is_empty() {
-        nested_string(&symbol_data, &["result", "display_title"])
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| item.display_name().to_string())
-    } else {
-        item.display_name().to_string()
-    };
+    let component_name = resolved_component_name(item, &symbol_data);
     let out_file = out_dir.join(format!("{}.SchLib", sanitize_filename(&component_name)));
     if out_file.exists() && !force {
         return Ok(out_file);
     }
 
-    let metadata = build_schlib_metadata(item, &symbol_data);
-    write_schlib_from_payload_with_metadata(&symbol_data, &component_name, &metadata, &out_file)?;
+    let component = build_schlib_component_from_detail(item, &symbol_data, &component_name)?;
+    write_schlib(&component, &out_file)?;
     Ok(out_file)
 }
 

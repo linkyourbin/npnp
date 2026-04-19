@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -211,7 +212,8 @@ pub struct PcbComponentBody {
 pub fn write_pcblib(library: &PcbLibrary, output_path: &Path) -> Result<()> {
     let file = File::create(output_path)?;
     let mut compound = cfb::CompoundFile::create(file)?;
-    let section_keys = collect_section_keys(library);
+    let sections = collect_sections(&library.components);
+    let section_keys = collect_section_key_pairs(&sections);
 
     write_stream(&mut compound, "/FileHeader", &file_header_bytes(library))?;
     if !section_keys.is_empty() {
@@ -264,8 +266,7 @@ pub fn write_pcblib(library: &PcbLibrary, output_path: &Path) -> Result<()> {
     )?;
     write_stream(&mut compound, "/Library/ModelsNoEmbed/Data", &[])?;
 
-    for component in &library.components {
-        let section_key = section_key_for_component(component);
+    for (component, section_key) in &sections {
         compound.create_storage(&format!("/{section_key}/"))?;
         write_stream(
             &mut compound,
@@ -313,19 +314,44 @@ fn write_stream(
     stream.write_all(data)
 }
 
-fn collect_section_keys(library: &PcbLibrary) -> Vec<(String, String)> {
-    library
-        .components
+fn collect_sections<'a>(components: &'a [PcbComponent]) -> Vec<(&'a PcbComponent, String)> {
+    let mut used = HashSet::new();
+    components
         .iter()
-        .filter_map(|component| {
-            let key = section_key_from_name(&component.name);
-            (key != component.name).then(|| (component.name.clone(), key))
+        .map(|component| {
+            let section_key = unique_section_key(&component.name, &mut used);
+            (component, section_key)
         })
         .collect()
 }
 
-fn section_key_for_component(component: &PcbComponent) -> String {
-    section_key_from_name(&component.name)
+fn collect_section_key_pairs(sections: &[(&PcbComponent, String)]) -> Vec<(String, String)> {
+    sections
+        .iter()
+        .filter_map(|(component, section_key)| {
+            (section_key.as_str() != component.name.as_str())
+                .then(|| (component.name.clone(), section_key.clone()))
+        })
+        .collect()
+}
+
+fn unique_section_key(name: &str, used: &mut HashSet<String>) -> String {
+    let base = section_key_from_name(name);
+    if used.insert(base.clone()) {
+        return base;
+    }
+
+    let mut index = 2usize;
+    loop {
+        let suffix = format!("_{index}");
+        let max_len = 31usize.saturating_sub(suffix.len());
+        let prefix: String = base.chars().take(max_len.max(1)).collect();
+        let candidate = format!("{prefix}{suffix}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        index += 1;
+    }
 }
 
 pub fn section_key_from_name(name: &str) -> String {
@@ -1046,6 +1072,41 @@ mod tests {
         assert!(compound.open_stream("/FileHeader").is_ok());
         assert!(compound.open_stream("/Library/Data").is_ok());
         assert!(compound.open_stream("/TEST_FOOTPRINT/Data").is_ok());
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn writes_unique_section_keys_for_colliding_component_names() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("syft_pcblib_multi_{timestamp}.PcbLib"));
+        let name_a = format!("{}1", "A".repeat(31));
+        let name_b = format!("{}2", "A".repeat(31));
+        let make_component = |name: String| PcbComponent {
+            name,
+            description: "Generated".to_string(),
+            height_raw: 100_000,
+            pads: vec![],
+            arcs: vec![],
+            tracks: vec![],
+            regions: vec![],
+            bodies: vec![],
+        };
+        let library = PcbLibrary {
+            unique_id: stable_alpha_id("TEST_MULTI", "library"),
+            components: vec![make_component(name_a), make_component(name_b)],
+            models: vec![],
+        };
+
+        write_pcblib(&library, &path).unwrap();
+        let file = File::open(&path).unwrap();
+        let mut compound = cfb::CompoundFile::open(file).unwrap();
+        let first_key = "A".repeat(31);
+        let second_key = format!("{}{}", "A".repeat(29), "_2");
+        assert!(compound.open_stream(&format!("/{first_key}/Data")).is_ok());
+        assert!(compound.open_stream(&format!("/{second_key}/Data")).is_ok());
         fs::remove_file(path).ok();
     }
 }

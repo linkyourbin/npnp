@@ -2,7 +2,7 @@
 #[allow(dead_code)]
 mod common;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -50,8 +50,20 @@ pub fn write_schlib_from_payload_with_metadata(
     metadata: &SchlibMetadata,
     output_path: &Path,
 ) -> Result<()> {
-    let component = build_component(payload, component_name, metadata)?;
-    write_schlib(&component, output_path)
+    let component = build_component_from_payload_with_metadata(payload, component_name, metadata)?;
+    write_schlib_library(std::slice::from_ref(&component), output_path)
+}
+
+pub fn build_component_from_payload(payload: &Value, component_name: &str) -> Result<Component> {
+    build_component_from_payload_with_metadata(payload, component_name, &SchlibMetadata::default())
+}
+
+pub fn build_component_from_payload_with_metadata(
+    payload: &Value,
+    component_name: &str,
+    metadata: &SchlibMetadata,
+) -> Result<Component> {
+    build_component(payload, component_name, metadata)
 }
 
 fn build_component(
@@ -975,26 +987,80 @@ fn same_point(left: PointUnits, right: PointUnits) -> bool {
 }
 
 pub fn write_schlib(component: &Component, output_path: &Path) -> Result<()> {
+    write_schlib_library(std::slice::from_ref(component), output_path)
+}
+
+pub fn write_schlib_library(components: &[Component], output_path: &Path) -> Result<()> {
+    if components.is_empty() {
+        return Err(crate::error::AppError::Other(
+            "cannot write empty SchLib library".to_string(),
+        ));
+    }
+
+    let sections = collect_sections(components);
     let file = File::create(output_path)?;
     let mut compound = cfb::CompoundFile::create(file)?;
-    let section_key = common::section_key_from_name(&component.name);
-    write_stream(&mut compound, "/FileHeader", &file_header_bytes(component))?;
-    if section_key != component.name {
+
+    write_stream(&mut compound, "/FileHeader", &file_header_bytes(components))?;
+    let section_keys = collect_section_key_pairs(&sections);
+    if !section_keys.is_empty() {
         write_stream(
             &mut compound,
             "/SectionKeys",
-            &section_keys_bytes(&component.name, &section_key),
+            &section_keys_bytes(&section_keys),
         )?;
     }
-    compound.create_storage(&format!("/{section_key}/"))?;
-    write_stream(
-        &mut compound,
-        &format!("/{section_key}/Data"),
-        &component_data_bytes(component),
-    )?;
+    for (component, section_key) in &sections {
+        compound.create_storage(&format!("/{section_key}/"))?;
+        write_stream(
+            &mut compound,
+            &format!("/{section_key}/Data"),
+            &component_data_bytes(component),
+        )?;
+    }
     write_stream(&mut compound, "/Storage", &storage_bytes())?;
     compound.flush()?;
     Ok(())
+}
+
+fn collect_sections<'a>(components: &'a [Component]) -> Vec<(&'a Component, String)> {
+    let mut used = HashSet::new();
+    components
+        .iter()
+        .map(|component| {
+            let section_key = unique_section_key(&component.name, &mut used);
+            (component, section_key)
+        })
+        .collect()
+}
+
+fn collect_section_key_pairs(sections: &[(&Component, String)]) -> Vec<(String, String)> {
+    sections
+        .iter()
+        .filter_map(|(component, section_key)| {
+            (section_key.as_str() != component.name.as_str())
+                .then(|| (component.name.clone(), section_key.clone()))
+        })
+        .collect()
+}
+
+fn unique_section_key(name: &str, used: &mut HashSet<String>) -> String {
+    let base = common::section_key_from_name(name);
+    if used.insert(base.clone()) {
+        return base;
+    }
+
+    let mut index = 2usize;
+    loop {
+        let suffix = format!("_{index}");
+        let max_len = 31usize.saturating_sub(suffix.len());
+        let prefix: String = base.chars().take(max_len.max(1)).collect();
+        let candidate = format!("{prefix}{suffix}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        index += 1;
+    }
 }
 
 fn write_stream(
@@ -1006,14 +1072,14 @@ fn write_stream(
     stream.write_all(data)
 }
 
-fn file_header_bytes(component: &Component) -> Vec<u8> {
+fn file_header_bytes(components: &[Component]) -> Vec<u8> {
     let mut writer = common::BinaryWriter::default();
     let mut params = common::Params::default();
     params.push(
         "HEADER",
         "Protel for Windows - Schematic Library Editor Binary File Version 5.0",
     );
-    params.push("WEIGHT", schlib_weight(component).to_string());
+    params.push("WEIGHT", schlib_weight(components).to_string());
     params.push("MINORVERSION", "2");
     params.push("FONTIDCOUNT", "1");
     params.push("SIZE1", "10");
@@ -1034,22 +1100,31 @@ fn file_header_bytes(component: &Component) -> Vec<u8> {
     params.push("USECUSTOMSHEET", "T");
     params.push("REFERENCEZONESON", "T");
     params.push("DISPLAY_UNIT", "0");
-    params.push("COMPCOUNT", "1");
-    params.push("LIBREF0", &component.name);
-    params.push("COMPDESCR0", &component.description);
-    params.push("PARTCOUNT0", (component.part_count + 1).to_string());
+    params.push("COMPCOUNT", components.len().to_string());
+    for (index, component) in components.iter().enumerate() {
+        params.push(format!("LIBREF{index}"), &component.name);
+        params.push(format!("COMPDESCR{index}"), &component.description);
+        params.push(
+            format!("PARTCOUNT{index}"),
+            (component.part_count + 1).to_string(),
+        );
+    }
     writer.write_cstring_param_block(&params);
-    writer.write_i32(1);
-    writer.write_string_block(&component.name);
+    writer.write_i32(components.len() as i32);
+    for component in components {
+        writer.write_string_block(&component.name);
+    }
     writer.into_inner()
 }
 
-fn section_keys_bytes(component_name: &str, section_key: &str) -> Vec<u8> {
+fn section_keys_bytes(section_keys: &[(String, String)]) -> Vec<u8> {
     let mut writer = common::BinaryWriter::default();
     let mut params = common::Params::default();
-    params.push("KeyCount", "1");
-    params.push("LibRef0", component_name);
-    params.push("SectionKey0", section_key);
+    params.push("KeyCount", section_keys.len().to_string());
+    for (index, (component_name, section_key)) in section_keys.iter().enumerate() {
+        params.push(format!("LibRef{index}"), component_name);
+        params.push(format!("SectionKey{index}"), section_key);
+    }
     writer.write_cstring_param_block(&params);
     writer.into_inner()
 }
@@ -1060,7 +1135,11 @@ fn storage_bytes() -> Vec<u8> {
     writer.write_cstring_param_block(&params);
     writer.into_inner()
 }
-fn schlib_weight(component: &Component) -> usize {
+fn schlib_weight(components: &[Component]) -> usize {
+    components.iter().map(component_weight).sum()
+}
+
+fn component_weight(component: &Component) -> usize {
     1 + component.rectangles.len()
         + component.labels.len()
         + component.polylines.len()
@@ -1543,7 +1622,10 @@ pub struct Component {
 
 #[cfg(test)]
 mod tests {
-    use super::{SchlibMetadata, SchlibParameter, write_schlib_from_payload_with_metadata};
+    use super::{
+        SchlibMetadata, SchlibParameter, build_component_from_payload,
+        write_schlib_from_payload_with_metadata, write_schlib_library,
+    };
     use serde_json::json;
     use std::fs::File;
     use std::io::Read;
@@ -1608,5 +1690,41 @@ mod tests {
         assert!(data_text.contains("|TEXT=LQFN-56_L7.0-W7.0-P0.4-EP|"));
         assert!(data_text.contains("|NAME=Manufacturer|"));
         assert!(data_text.contains("|TEXT=Raspberry Pi|"));
+    }
+
+    #[test]
+    fn writes_multi_component_schlib_with_unique_section_keys() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("syft_schlib_multi_{timestamp}.SchLib"));
+        let name_a = format!("{}1", "A".repeat(31));
+        let name_b = format!("{}2", "A".repeat(31));
+        let component_a = build_component_from_payload(&sample_payload(), &name_a).unwrap();
+        let component_b = build_component_from_payload(&sample_payload(), &name_b).unwrap();
+
+        write_schlib_library(&[component_a, component_b], &path).unwrap();
+
+        let file = File::open(&path).unwrap();
+        let mut compound = cfb::CompoundFile::open(file).unwrap();
+        let mut header_stream = compound.open_stream("/FileHeader").unwrap();
+        let mut header = Vec::new();
+        header_stream.read_to_end(&mut header).unwrap();
+        let header_text = String::from_utf8_lossy(&header);
+        assert!(header_text.contains("|COMPCOUNT=2|"));
+
+        let mut section_keys_stream = compound.open_stream("/SectionKeys").unwrap();
+        let mut section_keys = Vec::new();
+        section_keys_stream.read_to_end(&mut section_keys).unwrap();
+        let section_keys_text = String::from_utf8_lossy(&section_keys);
+        assert!(section_keys_text.contains("|KeyCount=2|"));
+
+        let first_key = "A".repeat(31);
+        let second_key = format!("{}{}", "A".repeat(29), "_2");
+        assert!(compound.open_stream(&format!("/{first_key}/Data")).is_ok());
+        assert!(compound.open_stream(&format!("/{second_key}/Data")).is_ok());
+
+        std::fs::remove_file(path).ok();
     }
 }
