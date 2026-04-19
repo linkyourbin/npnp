@@ -14,6 +14,7 @@ name = "syft"
 path = "src/main.rs"
 
 [dependencies]
+encoding_rs = "0.8.35"
 cfb = "0.14.0"
 clap = { version = "4.6.0", features = ["derive"] }
 reqwest = { version = "0.13.2", features = ["json"] }

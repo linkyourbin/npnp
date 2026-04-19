@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
+use encoding_rs::GBK;
 use serde_json::Value;
 
 use crate::error::{AppError, Result};
@@ -749,17 +750,9 @@ pub(super) fn dxp_i16(raw: i64) -> i16 {
 }
 
 fn encode_ansi_lossy(text: &str) -> Vec<u8> {
-    text.chars()
-        .map(|character| {
-            if character == '\0' {
-                b'?'
-            } else if (character as u32) <= 0xFF {
-                character as u8
-            } else {
-                b'?'
-            }
-        })
-        .collect()
+    let sanitized = text.replace(' ', "?");
+    let (bytes, _, _) = GBK.encode(&sanitized);
+    bytes.into_owned()
 }
 
 #[derive(Debug, Clone)]

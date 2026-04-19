@@ -1,16 +1,16 @@
-﻿use std::collections::BTreeMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use serde_json::to_string_pretty;
+use serde_json::{Value, to_string_pretty};
 
 use crate::error::{AppError, Result};
 use crate::footprint::build_pcblib_from_payload;
 use crate::lceda::{LcedaClient, SearchItem};
 use crate::pcblib::write_pcblib;
-use crate::schlib::write_schlib_from_payload;
-use crate::util::{nested_string, sanitize_filename, split_obj_and_mtl};
+use crate::schlib::{SchlibMetadata, SchlibParameter, write_schlib_from_payload_with_metadata};
+use crate::util::{nested_string, sanitize_filename, split_obj_and_mtl, value_to_string};
 
 #[derive(Debug, Serialize)]
 struct BundleManifest {
@@ -197,7 +197,8 @@ pub async fn export_schlib(
         return Ok(out_file);
     }
 
-    write_schlib_from_payload(&symbol_data, &component_name, &out_file)?;
+    let metadata = build_schlib_metadata(item, &symbol_data);
+    write_schlib_from_payload_with_metadata(&symbol_data, &component_name, &metadata, &out_file)?;
     Ok(out_file)
 }
 
@@ -261,4 +262,204 @@ pub async fn export_bundle(
     exported.insert("manifest".to_string(), manifest_file);
 
     Ok(exported)
+}
+
+fn build_schlib_metadata(item: &SearchItem, symbol_data: &Value) -> SchlibMetadata {
+    let mut parameters = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    if let Some(footprint_name) = first_non_empty([
+        nested_string(&item.raw, &["footprint", "display_title"]),
+        nested_string(&item.raw, &["attributes", "Supplier Footprint"]),
+    ]) {
+        push_schlib_parameter(
+            &mut parameters,
+            &mut seen_names,
+            "Footprint",
+            footprint_name,
+        );
+    }
+
+    if let Some(attributes) = item.raw.get("attributes").and_then(Value::as_object) {
+        for (name, value) in attributes {
+            if should_skip_schlib_parameter(name) {
+                continue;
+            }
+            let Some(value) = value_to_string(value) else {
+                continue;
+            };
+            if value.trim().is_empty() || value.trim() == "-" {
+                continue;
+            }
+            push_schlib_parameter(&mut parameters, &mut seen_names, name, value);
+        }
+    }
+
+    SchlibMetadata {
+        description: first_non_empty([
+            nested_string(&item.raw, &["description"]),
+            nested_string(symbol_data, &["result", "description"]),
+            nested_string(&item.raw, &["attributes", "LCSC Part Name"]),
+            nested_string(&item.raw, &["attributes", "Manufacturer Part"]),
+        ]),
+        designator: first_non_empty([nested_string(&item.raw, &["attributes", "Designator"])]),
+        comment: resolve_schlib_comment(item),
+        parameters,
+    }
+}
+
+fn resolve_schlib_comment(item: &SearchItem) -> Option<String> {
+    let attributes = item.raw.get("attributes").and_then(Value::as_object);
+
+    if let Some(name) = find_attribute_value_case_insensitive(attributes, "Name") {
+        if let Some(resolved) = resolve_attribute_formula(&name, attributes) {
+            return Some(resolved);
+        }
+        if extract_formula_field(&name).is_none() {
+            return Some(name);
+        }
+    }
+
+    first_non_empty([
+        find_attribute_value_case_insensitive(attributes, "Manufacturer Part"),
+        find_attribute_value_case_insensitive(attributes, "Value"),
+        find_attribute_value_case_insensitive(attributes, "LCSC Part Name"),
+        Some(item.display_name().to_string()),
+    ])
+}
+
+fn resolve_attribute_formula(
+    text: &str,
+    attributes: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    let field = extract_formula_field(text)?;
+    find_attribute_value_case_insensitive(attributes, &field)
+}
+
+fn extract_formula_field(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let rhs = trimmed.strip_prefix('=')?.trim();
+    let field = rhs.strip_prefix('{')?.strip_suffix('}')?.trim();
+    if field.is_empty() {
+        None
+    } else {
+        Some(field.to_string())
+    }
+}
+
+fn find_attribute_value_case_insensitive(
+    attributes: Option<&serde_json::Map<String, Value>>,
+    name: &str,
+) -> Option<String> {
+    let attributes = attributes?;
+    attributes
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .and_then(|(_, value)| value_to_string(value))
+        .filter(|value| {
+            let trimmed = value.trim();
+            !trimmed.is_empty() && trimmed != "-"
+        })
+}
+fn first_non_empty<const N: usize>(candidates: [Option<String>; N]) -> Option<String> {
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|value| !value.trim().is_empty())
+}
+
+fn push_schlib_parameter(
+    parameters: &mut Vec<SchlibParameter>,
+    seen_names: &mut std::collections::HashSet<String>,
+    name: impl Into<String>,
+    value: impl Into<String>,
+) {
+    let name = name.into();
+    let value = value.into();
+    let normalized = name.trim().to_ascii_lowercase();
+    if normalized.is_empty() || !seen_names.insert(normalized) {
+        return;
+    }
+    parameters.push(SchlibParameter { name, value });
+}
+
+fn should_skip_schlib_parameter(name: &str) -> bool {
+    const SKIP: [&str; 9] = [
+        "Add into BOM",
+        "Convert to PCB",
+        "Symbol",
+        "Designator",
+        "Footprint",
+        "3D Model",
+        "3D Model Title",
+        "3D Model Transform",
+        "Name",
+    ];
+    SKIP.iter().any(|item| item.eq_ignore_ascii_case(name))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn resolves_manufacturer_part_formula_comment() {
+        let item = SearchItem {
+            index: 0,
+            display_title: "RP2040".to_string(),
+            title: String::new(),
+            manufacturer: "Raspberry Pi".to_string(),
+            model_uuid: None,
+            raw: json!({
+                "attributes": {
+                    "Name": "={Manufacturer Part}",
+                    "Manufacturer Part": "RP2040"
+                }
+            }),
+        };
+
+        assert_eq!(resolve_schlib_comment(&item).as_deref(), Some("RP2040"));
+    }
+
+    #[test]
+    fn resolves_value_formula_comment() {
+        let item = SearchItem {
+            index: 0,
+            display_title: "TMB12A05".to_string(),
+            title: String::new(),
+            manufacturer: "XUNPU".to_string(),
+            model_uuid: None,
+            raw: json!({
+                "attributes": {
+                    "Name": "={Value}",
+                    "Value": "2.4kHz",
+                    "Manufacturer Part": "TMB12A05"
+                }
+            }),
+        };
+
+        assert_eq!(resolve_schlib_comment(&item).as_deref(), Some("2.4kHz"));
+    }
+
+    #[test]
+    fn falls_back_when_formula_cannot_be_resolved() {
+        let item = SearchItem {
+            index: 0,
+            display_title: "XC7Z020-2CLG400I".to_string(),
+            title: String::new(),
+            manufacturer: "AMD".to_string(),
+            model_uuid: None,
+            raw: json!({
+                "attributes": {
+                    "Name": "={Missing Field}",
+                    "Manufacturer Part": "XC7Z020-2CLG400I"
+                }
+            }),
+        };
+
+        assert_eq!(
+            resolve_schlib_comment(&item).as_deref(),
+            Some("XC7Z020-2CLG400I")
+        );
+    }
 }

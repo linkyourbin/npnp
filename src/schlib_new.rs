@@ -10,27 +10,61 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::error::Result;
+use crate::util::nested_string;
 
 const WHITE_BGR: i32 = 0xFFFFFF;
 const BODY_LINE_WIDTH_INDEX: i32 = 1;
 const GRAPHIC_LINE_WIDTH_INDEX: i32 = 1;
 const PIN_LENGTH_UNITS: f64 = 20.0;
 
+#[derive(Debug, Clone, Default)]
+pub struct SchlibMetadata {
+    pub description: Option<String>,
+    pub designator: Option<String>,
+    pub comment: Option<String>,
+    pub parameters: Vec<SchlibParameter>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SchlibParameter {
+    pub name: String,
+    pub value: String,
+}
+
 pub fn write_schlib_from_payload(
     payload: &Value,
     component_name: &str,
     output_path: &Path,
 ) -> Result<()> {
-    let component = build_component(payload, component_name)?;
+    write_schlib_from_payload_with_metadata(
+        payload,
+        component_name,
+        &SchlibMetadata::default(),
+        output_path,
+    )
+}
+
+pub fn write_schlib_from_payload_with_metadata(
+    payload: &Value,
+    component_name: &str,
+    metadata: &SchlibMetadata,
+    output_path: &Path,
+) -> Result<()> {
+    let component = build_component(payload, component_name, metadata)?;
     write_schlib(&component, output_path)
 }
 
-fn build_component(payload: &Value, component_name: &str) -> Result<Component> {
+fn build_component(
+    payload: &Value,
+    component_name: &str,
+    metadata: &SchlibMetadata,
+) -> Result<Component> {
     let rows = old::parse_easyeda_rows(payload)?;
     let mut parts: Vec<PartRaw> = Vec::new();
     let mut current_part_index = None;
     let mut has_part_rows = false;
     let mut attr_by_parent: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut root_attrs: HashMap<String, String> = HashMap::new();
     let mut global_bounds = old::OptionalBounds::default();
 
     for row in &rows {
@@ -52,12 +86,17 @@ fn build_component(payload: &Value, component_name: &str) -> Result<Component> {
             "ATTR" => {
                 let parent = old::row_string(row, 2);
                 let key = old::row_string(row, 3);
-                if parent.trim().is_empty() || key.trim().is_empty() {
+                if key.trim().is_empty() {
                     continue;
                 }
                 let key_upper = key.trim().to_ascii_uppercase();
+                let value = old::row_string(row, 4);
+                if parent.trim().is_empty() {
+                    root_attrs.insert(key_upper, value);
+                    continue;
+                }
                 let attrs = attr_by_parent.entry(parent.trim().to_string()).or_default();
-                attrs.insert(key_upper.clone(), old::row_string(row, 4));
+                attrs.insert(key_upper.clone(), value);
                 attrs.insert(
                     format!("{key_upper}__VISIBLE"),
                     old::row_bool(row, 6, true).to_string(),
@@ -275,9 +314,40 @@ fn build_component(payload: &Value, component_name: &str) -> Result<Component> {
         parts.push(PartRaw::new(1, None));
     }
 
+    let description = metadata
+        .description
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| nested_string(payload, &["result", "description"]))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Generated from EasyEDA symbol".to_string());
+    let designator_text = metadata
+        .designator
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| root_attrs.get("DESIGNATOR").cloned())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "*".to_string());
+    let comment_text = metadata
+        .comment
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| root_attrs.get("NAME").cloned())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "*".to_string());
+    let parameters = metadata
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.name.trim().is_empty() && !parameter.value.trim().is_empty())
+        .cloned()
+        .collect();
+
     let mut component = Component {
         name: normalize_component_name(component_name),
-        description: "Generated from EasyEDA symbol".to_string(),
+        description,
+        designator_text,
+        comment_text,
+        parameters,
         part_count: parts.len().max(1),
         pins: Vec::new(),
         rectangles: Vec::new(),
@@ -1143,6 +1213,24 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
             w.write_pascal_short_string("");
         });
     }
+    for (index, parameter) in component.parameters.iter().enumerate() {
+        let mut p = old::Params::default();
+        p.push("RECORD", "41");
+        p.push("OWNERPARTID", "-1");
+        p.push("LOCATION.X_FRAC", "-5");
+        p.push("LOCATION.Y_FRAC", "-15");
+        p.push("COLOR", "8388608");
+        p.push("FONTID", "1");
+        p.push("ISHIDDEN", "T");
+        p.push("TEXT", &parameter.value);
+        p.push("NAME", &parameter.name);
+        p.push(
+            "UNIQUEID",
+            stable_unique_id(&component.name, &format!("PARAM{index}_{}", parameter.name)),
+        );
+        writer.write_cstring_param_block(&p);
+    }
+
     let mut d = old::Params::default();
     d.push("RECORD", "34");
     d.push("OWNERPARTID", "-1");
@@ -1150,7 +1238,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
     d.push("LOCATION.Y_FRAC", "5");
     d.push("COLOR", "8388608");
     d.push("FONTID", "1");
-    d.push("TEXT", "*");
+    d.push("TEXT", &component.designator_text);
     d.push("NAME", "Designator");
     d.push("READONLYSTATE", "1");
     d.push("UNIQUEID", stable_unique_id(&component.name, "DESIGNATOR"));
@@ -1163,7 +1251,7 @@ fn component_data_bytes(component: &Component) -> Vec<u8> {
     c.push("COLOR", "8388608");
     c.push("FONTID", "1");
     c.push("ISHIDDEN", "T");
-    c.push("TEXT", "*");
+    c.push("TEXT", &component.comment_text);
     c.push("NAME", "Comment");
     c.push("UNIQUEID", stable_unique_id(&component.name, "COMMENT"));
     writer.write_cstring_param_block(&c);
@@ -1431,6 +1519,9 @@ struct Label {
 pub struct Component {
     name: String,
     description: String,
+    designator_text: String,
+    comment_text: String,
+    parameters: Vec<SchlibParameter>,
     part_count: usize,
     pins: Vec<Pin>,
     rectangles: Vec<Rectangle>,
@@ -1438,4 +1529,74 @@ pub struct Component {
     arcs: Vec<Arc>,
     ellipses: Vec<Ellipse>,
     labels: Vec<Label>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SchlibMetadata, SchlibParameter, write_schlib_from_payload_with_metadata};
+    use serde_json::json;
+    use std::fs::File;
+    use std::io::Read;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn sample_payload() -> serde_json::Value {
+        json!({"result": {"dataStr": r#"["DOCTYPE","SYMBOL","1.1"]
+["PART","U.1",{"BBOX":[-10,-10,10,10]}]
+["RECT","body",-10,-10,10,10,0,0,0,"st1",0]
+["ATTR","root1","","Symbol","TEST",false,false,null,null,0,"st3",0]
+["ATTR","root2","","Designator","U?",false,false,null,null,0,"st3",0]
+["PIN","p1",1,null,-20,0,10,0,null,0,0,1]
+["ATTR","p1n","p1","NAME","A",false,true,-5,0,0,"st3",0]
+["ATTR","p1d","p1","NUMBER","1",false,true,-10,0,0,"st4",0]
+["PIN","p2",1,null,20,0,10,180,null,0,0,1]
+["ATTR","p2n","p2","NAME","B",false,true,5,0,0,"st3",0]
+["ATTR","p2d","p2","NUMBER","2",false,true,10,0,0,"st4",0]"#}})
+    }
+
+    #[test]
+    fn writes_metadata_records_into_schlib() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("syft_schlib_meta_{timestamp}.SchLib"));
+        let metadata = SchlibMetadata {
+            description: Some("CPU Core: -; CPU Maximum Speed: 133MHz;".to_string()),
+            designator: Some("U?".to_string()),
+            comment: Some("={Manufacturer Part}".to_string()),
+            parameters: vec![
+                SchlibParameter {
+                    name: "Footprint".to_string(),
+                    value: "LQFN-56_L7.0-W7.0-P0.4-EP".to_string(),
+                },
+                SchlibParameter {
+                    name: "Manufacturer".to_string(),
+                    value: "Raspberry Pi".to_string(),
+                },
+            ],
+        };
+
+        write_schlib_from_payload_with_metadata(&sample_payload(), "TEST/COMP", &metadata, &path)
+            .unwrap();
+
+        let file = File::open(&path).unwrap();
+        let mut compound = cfb::CompoundFile::open(file).unwrap();
+        let mut data_stream = compound.open_stream("/TEST_COMP/Data").unwrap();
+        let mut data = Vec::new();
+        data_stream.read_to_end(&mut data).unwrap();
+        let data_text = String::from_utf8_lossy(&data);
+
+        assert!(
+            data_text.contains("|COMPONENTDESCRIPTION=CPU Core: -; CPU Maximum Speed: 133MHz;|")
+        );
+        assert!(data_text.contains("|RECORD=34|"));
+        assert!(data_text.contains("|NAME=Designator|"));
+        assert!(data_text.contains("|TEXT=U?|"));
+        assert!(data_text.contains("|NAME=Comment|"));
+        assert!(data_text.contains("|TEXT=={Manufacturer Part}|"));
+        assert!(data_text.contains("|NAME=Footprint|"));
+        assert!(data_text.contains("|TEXT=LQFN-56_L7.0-W7.0-P0.4-EP|"));
+        assert!(data_text.contains("|NAME=Manufacturer|"));
+        assert!(data_text.contains("|TEXT=Raspberry Pi|"));
+    }
 }
