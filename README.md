@@ -4,6 +4,13 @@
   <img src="assets/npnp.png" alt="npnp app logo" width="360">
 </p>
 
+<p align="center">
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/version-0.1.2-e05d44?style=flat-square" alt="version 0.1.2"></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-PolyForm--NC%201.0-f08c5a?style=flat-square" alt="license PolyForm NC 1.0"></a>
+  <a href=".github/workflows/windows-release.yml"><img src="https://img.shields.io/badge/platform-Windows-2ea44f?style=flat-square" alt="platform Windows"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-edition%202024-f28d1a?style=flat-square" alt="rust edition 2024"></a>
+</p>
+
 Languages: English | [Chinese](README.zh-CN.md)
 
 Normalize Pin Net Pad (`npnp`) is an LCEDA/EasyEDA downloader and Altium library exporter written in pure Rust.
