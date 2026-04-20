@@ -20,7 +20,7 @@ pub struct LcedaClient {
 impl LcedaClient {
     pub fn new() -> Self {
         let client = Client::builder()
-            .user_agent(format!("syft/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("npnp/{}", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(35))
             .build()
@@ -71,17 +71,7 @@ impl LcedaClient {
 
     pub async fn select_item(&self, keyword: &str, index: usize) -> Result<SearchItem> {
         let items = self.search_components(keyword).await?;
-        if items.is_empty() {
-            return Err(AppError::NoResults(keyword.to_string()));
-        }
-        if !(1..=items.len()).contains(&index) {
-            return Err(AppError::InvalidIndex {
-                keyword: keyword.to_string(),
-                index,
-                max: items.len(),
-            });
-        }
-        Ok(items[index - 1].clone())
+        select_from_items(keyword, index, &items)
     }
 
     pub async fn component_detail(&self, uuid: &str) -> Result<Value> {
@@ -133,8 +123,102 @@ impl LcedaClient {
     }
 }
 
+fn select_from_items(keyword: &str, index: usize, items: &[SearchItem]) -> Result<SearchItem> {
+    if items.is_empty() {
+        return Err(AppError::NoResults(keyword.to_string()));
+    }
+    if !(1..=items.len()).contains(&index) {
+        return Err(AppError::InvalidIndex {
+            keyword: keyword.to_string(),
+            index,
+            max: items.len(),
+        });
+    }
+
+    if index == 1 {
+        if let Some(item) = find_exact_lcsc_id_match(keyword, items) {
+            return Ok(item.clone());
+        }
+    }
+
+    Ok(items[index - 1].clone())
+}
+
+fn find_exact_lcsc_id_match<'a>(keyword: &str, items: &'a [SearchItem]) -> Option<&'a SearchItem> {
+    let keyword = keyword.trim();
+    if !is_lcsc_id_keyword(keyword) {
+        return None;
+    }
+
+    items.iter().find(|item| {
+        item.lcsc_id()
+            .as_deref()
+            .is_some_and(|lcsc_id| lcsc_id.eq_ignore_ascii_case(keyword))
+    })
+}
+
+fn is_lcsc_id_keyword(keyword: &str) -> bool {
+    let trimmed = keyword.trim();
+    let Some(digits) = trimmed
+        .strip_prefix('C')
+        .or_else(|| trimmed.strip_prefix('c'))
+    else {
+        return false;
+    };
+
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 impl Default for LcedaClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_lcsc_id_keyword, select_from_items};
+    use crate::lceda::SearchItem;
+    use serde_json::json;
+
+    #[test]
+    fn selects_exact_lcsc_id_match_for_default_index() {
+        let items = vec![
+            item(1, "Almost Match", "C20400"),
+            item(2, "Exact Match", "C2040"),
+        ];
+
+        let selected = select_from_items("C2040", 1, &items).expect("select exact item");
+        assert_eq!(selected.display_name(), "Exact Match");
+        assert_eq!(selected.index, 2);
+    }
+
+    #[test]
+    fn explicit_non_default_index_keeps_index_selection() {
+        let items = vec![item(1, "Exact Match", "C2040"), item(2, "Other", "C9999")];
+
+        let selected = select_from_items("C2040", 2, &items).expect("select indexed item");
+        assert_eq!(selected.display_name(), "Other");
+        assert_eq!(selected.index, 2);
+    }
+
+    #[test]
+    fn recognizes_exact_lcsc_id_keywords() {
+        assert!(is_lcsc_id_keyword("C2040"));
+        assert!(is_lcsc_id_keyword(" c2040 "));
+        assert!(!is_lcsc_id_keyword("C"));
+        assert!(!is_lcsc_id_keyword("C20A40"));
+        assert!(!is_lcsc_id_keyword("RP2040"));
+    }
+
+    fn item(index: usize, display_title: &str, lcsc_id: &str) -> SearchItem {
+        SearchItem {
+            index,
+            display_title: display_title.to_string(),
+            title: String::new(),
+            manufacturer: String::new(),
+            model_uuid: None,
+            raw: json!({"product_code": lcsc_id}),
+        }
     }
 }

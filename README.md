@@ -112,6 +112,7 @@ cargo run --quiet --bin npnp -- export-schlib C2040 --index 1 --output schlib --
 Notes:
 
 - `<KEYWORD>` can be an LCSC ID like `C2040` or a general search keyword
+- exact LCSC ID keywords prefer the matching result when `--index` is left at `1`
 - `--index` selects the search result row to export
 - output files are written into the directory passed to `--output`
 
