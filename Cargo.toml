@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2024"
 authors = ["linkyourbin"]
 description = "Normalize Pin Net Pad (npnp): pure Rust LCEDA acquisition and bundle exporter"
+readme = "README.md"
+include = [
+    "Cargo.lock",
+    "Cargo.toml",
+    "README.md",
+    "src/**",
+    "tests/**",
+]
 
 [lib]
 name = "npnp"
