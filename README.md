@@ -36,7 +36,7 @@ Install Rust from <https://rustup.rs/> if you do not already have it.
 Clone the repository:
 
 ```powershell
-git clone https://github.com/<OWNER>/<REPO>.git npnp
+git clone https://github.com/linkyourbin/npnp.git npnp
 cd npnp
 ```
 
