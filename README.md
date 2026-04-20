@@ -4,6 +4,8 @@
   <img src="assets/npnp.png" alt="npnp app logo" width="360">
 </p>
 
+Languages: English | [简体中文](README.zh-CN.md)
+
 Normalize Pin Net Pad (`npnp`) is a pure Rust LCEDA/EasyEDA downloader and Altium library exporter.
 
 `npnp` searches LCEDA/LCSC components, downloads upstream EasyEDA source data and 3D models, and exports Altium-compatible schematic and PCB footprint libraries without C#, .NET, or external exporter DLLs.
