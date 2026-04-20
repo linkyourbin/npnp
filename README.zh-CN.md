@@ -610,15 +610,45 @@ npnp batch --input ids.txt --output generated\check --full --force --continue-on
 npnp batch --input ids.txt --output generated\merged_check --merge --library-name MyLib --full --force --continue-on-error
 ```
 
+## 合并输出截图
+
+`imgs/` 目录保存了由 `npnp` 合并导出结果生成的截图。
+
+这些示例来自类似下面的合并导出流程：
+
+```powershell
+npnp batch --input ids.txt --output generated\merged_check --merge --library-name MyLib --full --force --continue-on-error
+```
+
+总览：
+
+![合并输出总览](imgs/overview.png)
+
+原理图库截图：
+
+<p align="center">
+  <img src="imgs/sch_01.png" alt="合并原理图库截图 1" width="32%">
+  <img src="imgs/sch_02.png" alt="合并原理图库截图 2" width="32%">
+  <img src="imgs/sch_03.png" alt="合并原理图库截图 3" width="32%">
+</p>
+
+PCB 封装库截图：
+
+<p align="center">
+  <img src="imgs/pcb_01.png" alt="合并 PCB 截图 1" width="32%">
+  <img src="imgs/pcb_02.png" alt="合并 PCB 截图 2" width="32%">
+  <img src="imgs/pcb_03.png" alt="合并 PCB 截图 3" width="32%">
+</p>
+
 ## 许可证
 
-`npnp` 使用 `LICENSE.md` 中的自定义非商业源码许可证。
+`npnp` 现在采用与当前项目诉求最接近的标准许可证：`LICENSE.txt` 中的 `PolyForm-Noncommercial-1.0.0`。
 
-- 允许个人、教育、研究、评估和其他非商业用途。
-- 商业使用、付费再分发、付费服务使用或商业产品集成需要事先获得书面许可。
-- 如果发布、分发或分享修改后的源码，需要保留对原始 `npnp` 项目的清晰署名，并说明修改内容，或向原项目提交 pull request / patch proposal。
+- 允许非商业用途、研究、评估和个人实验使用。
+- 商业使用、付费再分发、付费服务使用，或在商业工作流中使用，需要额外获得作者许可。
+- 如果再分发项目，请保留许可证文本和必需声明。
+- PolyForm 许可证本身不会强制要求提交 pull request。当前项目仍然希望任何公开发布修改版的人注明原始 `npnp` 项目，并尽量把修改以 pull request 的形式反馈回来。
 - 这是 source-available 的非商业许可证，不是 OSI open-source 许可证。
-- 如果中文说明与 `LICENSE.md` 有差异，以 `LICENSE.md` 为准。
 
 ## 生成文件说明
 

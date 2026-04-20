@@ -623,14 +623,47 @@ Merged library verification workflow:
 npnp batch --input ids.txt --output generated\merged_check --merge --library-name MyLib --full --force --continue-on-error
 ```
 
+## Merge Output Screenshots
+
+The `imgs/` directory stores screenshots generated from merged-library output produced by `npnp`.
+
+These examples come from a merged export workflow such as:
+
+```powershell
+npnp batch --input ids.txt --output generated\merged_check --merge --library-name MyLib --full --force --continue-on-error
+```
+
+Overview:
+
+![Merged output overview](imgs/overview.png)
+
+Schematic library screenshots:
+
+<p align="center">
+  <img src="imgs/sch_01.png" alt="Merged schematic screenshot 1" width="32%">
+  <img src="imgs/sch_02.png" alt="Merged schematic screenshot 2" width="32%">
+  <img src="imgs/sch_03.png" alt="Merged schematic screenshot 3" width="32%">
+</p>
+
+PCB library screenshots:
+
+<p align="center">
+  <img src="imgs/pcb_01.png" alt="Merged PCB screenshot 1" width="32%">
+  <img src="imgs/pcb_02.png" alt="Merged PCB screenshot 2" width="32%">
+  <img src="imgs/pcb_03.png" alt="Merged PCB screenshot 3" width="32%">
+</p>
+
 ## License
 
-`npnp` is released under the custom non-commercial source license in `LICENSE.md`.
+`npnp` now uses the closest standard license to the current project intent: `PolyForm-Noncommercial-1.0.0` in `LICENSE.txt`.
 
-- Personal, educational, research, evaluation, and other non-commercial use is allowed.
-- Commercial use, paid redistribution, paid service use, or commercial product integration requires prior written permission.
-- If you publish, distribute, or share modified source code, keep visible attribution to the original `npnp` project and either describe your changes or submit them back as a pull request or patch proposal.
-- This is a source-available non-commercial license, not an OSI open-source license.
+- Non-commercial use, research, evaluation, and personal experimentation are allowed.
+- Commercial use, paid redistribution, paid service use, or use inside a commercial workflow requires separate permission from the author.
+- If you redistribute the project, keep the license text and required notices.
+- The PolyForm license does not legally require pull requests. This project still asks anyone publishing modified versions to mention the original `npnp` project and, when possible, send changes back as a pull request.
+- This is source-available and non-commercial, not an OSI open-source license.
+
+
 ## Notes On Generated Files
 
 - Output filenames are sanitized for Windows-unsafe characters.
