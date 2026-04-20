@@ -1,5 +1,9 @@
 # npnp
 
+<p align="center">
+  <img src="assets/npnp.png" alt="npnp app logo" width="360">
+</p>
+
 Normalize Pin Net Pad (`npnp`) is a pure Rust LCEDA/EasyEDA downloader and Altium library exporter.
 
 `npnp` searches LCEDA/LCSC components, downloads upstream EasyEDA source data and 3D models, and exports Altium-compatible schematic and PCB footprint libraries without C#, .NET, or external exporter DLLs.
@@ -618,9 +622,17 @@ Merged library verification workflow:
 npnp batch --input ids.txt --output generated\merged_check --merge --library-name MyLib --full --force --continue-on-error
 ```
 
+## License
+
+`npnp` is released under the custom non-commercial source license in `LICENSE.md`.
+
+- Personal, educational, research, evaluation, and other non-commercial use is allowed.
+- Commercial use, paid redistribution, paid service use, or commercial product integration requires prior written permission.
+- If you publish, distribute, or share modified source code, keep visible attribution to the original `npnp` project and either describe your changes or submit them back as a pull request or patch proposal.
+- This is a source-available non-commercial license, not an OSI open-source license.
 ## Publishing Preparation
 
-Before pushing to GitHub or publishing to crates.io, run:
+Before pushing to GitHub or publishing to crates.io, run the checks below. This crate uses a custom non-commercial license through `license-file = "LICENSE.md"`, so verify that `LICENSE.md` is included in the package:
 
 ```powershell
 cargo fmt
