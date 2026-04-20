@@ -4,11 +4,11 @@
   <img src="assets/npnp.png" alt="npnp app logo" width="360">
 </p>
 
-Languages: English | [简体中文](README.zh-CN.md)
+Languages: English | [Chinese](README.zh-CN.md)
 
-Normalize Pin Net Pad (`npnp`) is a pure Rust LCEDA/EasyEDA downloader and Altium library exporter.
+Normalize Pin Net Pad (`npnp`) is an LCEDA/EasyEDA downloader and Altium library exporter written in pure Rust.
 
-`npnp` searches LCEDA/LCSC components, downloads upstream EasyEDA source data and 3D models, and exports Altium-compatible schematic and PCB footprint libraries without C#, .NET, or external exporter DLLs.
+`npnp` searches LCEDA/LCSC components, downloads upstream EasyEDA source data and 3D models, and exports Altium-compatible schematic and PCB footprint libraries.
 
 ## Features
 
@@ -27,7 +27,6 @@ Normalize Pin Net Pad (`npnp`) is a pure Rust LCEDA/EasyEDA downloader and Altiu
 
 - Rust toolchain for building from source.
 - Network access to LCEDA/EasyEDA APIs when searching, downloading, or exporting.
-- Windows is the primary tested environment.
 - Altium Designer is recommended for final visual verification of generated `.SchLib` and `.PcbLib` files.
 
 Install Rust from <https://rustup.rs/> if you do not already have it.
@@ -169,7 +168,7 @@ Uninstall the local Cargo-installed binary:
 cargo uninstall npnp
 ```
 
-After the crate is published to crates.io, users should be able to install it with:
+The tool is published to crates.io. Users with a Rust development environment can install it with:
 
 ```powershell
 cargo install npnp
@@ -632,52 +631,6 @@ npnp batch --input ids.txt --output generated\merged_check --merge --library-nam
 - Commercial use, paid redistribution, paid service use, or commercial product integration requires prior written permission.
 - If you publish, distribute, or share modified source code, keep visible attribution to the original `npnp` project and either describe your changes or submit them back as a pull request or patch proposal.
 - This is a source-available non-commercial license, not an OSI open-source license.
-## Publishing Preparation
-
-Before pushing to GitHub or publishing to crates.io, run the checks below. This crate uses a custom non-commercial license through `license-file = "LICENSE.md"`, so verify that `LICENSE.md` is included in the package:
-
-```powershell
-cargo fmt
-```
-
-```powershell
-cargo test
-```
-
-```powershell
-cargo build --release
-```
-
-Preview what Cargo will package:
-
-```powershell
-cargo package --list
-```
-
-Run a local packaging check:
-
-```powershell
-cargo package --allow-dirty
-```
-
-Run a crates.io publish dry run:
-
-```powershell
-cargo publish --dry-run
-```
-
-Publish after crate metadata, versioning, repository URL, license, and README are final:
-
-```powershell
-cargo publish
-```
-
-After publishing, users can install with:
-
-```powershell
-cargo install npnp
-```
-
 ## Notes On Generated Files
 
 - Output filenames are sanitized for Windows-unsafe characters.
@@ -737,47 +690,3 @@ Network/API issues:
 - Confirm that the machine can reach LCEDA/EasyEDA APIs.
 - Retry later if LCEDA/EasyEDA is temporarily unavailable.
 - `npnp` automatically retries transient request failures such as timeouts, connection failures, rate limiting, and server-side `5xx` responses.
-
-## Development Commands
-
-Run all tests:
-
-```powershell
-cargo test
-```
-
-Run only library unit tests:
-
-```powershell
-cargo test --lib
-```
-
-Run only the export regression integration test:
-
-```powershell
-cargo test --test export_regression
-```
-
-Run with help output during development:
-
-```powershell
-cargo run --quiet --bin npnp -- --help
-```
-
-Inspect a generated `.PcbLib` compound-file layout with the helper binary:
-
-```powershell
-cargo run --quiet --bin inspect_pcblib -- generated\merged_check\MyLib.PcbLib
-```
-
-Dump a stream from a generated compound file:
-
-```powershell
-cargo run --quiet --bin dump_stream -- generated\merged_check\MyLib.PcbLib /FileHeader 0
-```
-
-Dump bytes from a stream in a generated compound file:
-
-```powershell
-cargo run --quiet --bin dump_hex -- generated\merged_check\MyLib.PcbLib /FileHeader 0 64
-```
