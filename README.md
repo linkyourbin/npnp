@@ -655,7 +655,7 @@ PCB library screenshots:
 
 ## License
 
-`npnp` now uses the closest standard license to the current project intent: `PolyForm-Noncommercial-1.0.0` in `LICENSE.txt`.
+`npnp` now uses the closest standard license to the current project intent: `PolyForm-Noncommercial-1.0.0` in `LICENSE.md`.
 
 - Non-commercial use, research, evaluation, and personal experimentation are allowed.
 - Commercial use, paid redistribution, paid service use, or use inside a commercial workflow requires separate permission from the author.
