@@ -1016,7 +1016,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("syft_schlib_{timestamp}.SchLib"));
+        let path = std::env::temp_dir().join(format!("npnp_schlib_{timestamp}.SchLib"));
         write_schlib_from_payload(&sample_payload(), "TEST/COMP", &path).unwrap();
         let file = File::open(&path).unwrap();
         let mut compound = cfb::CompoundFile::open(file).unwrap();

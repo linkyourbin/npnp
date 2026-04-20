@@ -54,7 +54,7 @@ pub struct PcbLibrary {
 impl Default for PcbLibrary {
     fn default() -> Self {
         Self {
-            unique_id: stable_alpha_id("SYFT-PCBLIB", "library"),
+            unique_id: stable_alpha_id("NPNP-PCBLIB", "library"),
             components: Vec::new(),
             models: Vec::new(),
         }
@@ -1007,7 +1007,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("syft_pcblib_{timestamp}.PcbLib"));
+        let path = std::env::temp_dir().join(format!("npnp_pcblib_{timestamp}.PcbLib"));
         let component = PcbComponent {
             name: "TEST/FOOTPRINT".to_string(),
             description: "Generated".to_string(),
@@ -1081,7 +1081,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("syft_pcblib_multi_{timestamp}.PcbLib"));
+        let path = std::env::temp_dir().join(format!("npnp_pcblib_multi_{timestamp}.PcbLib"));
         let name_a = format!("{}1", "A".repeat(31));
         let name_b = format!("{}2", "A".repeat(31));
         let make_component = |name: String| PcbComponent {

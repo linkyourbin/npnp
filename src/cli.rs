@@ -1,14 +1,18 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "syft")]
+#[command(name = "npnp")]
 #[command(version)]
-#[command(about = "Pure Rust LCEDA downloader and bundle exporter")]
+#[command(about = "Normalize Pin Net Pad (npnp) - Pure Rust LCEDA downloader and bundle exporter")]
 pub struct Cli {
+    /// Show ready-to-run example commands
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub prompt: bool,
+
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -106,4 +110,28 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_prompt_without_subcommand() {
+        let cli = Cli::try_parse_from(["npnp", "--prompt"]).expect("prompt flag should parse");
+        assert!(cli.prompt);
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn parses_search_command_with_optional_subcommand_field() {
+        let cli =
+            Cli::try_parse_from(["npnp", "search", "C2040"]).expect("search command should parse");
+        assert!(!cli.prompt);
+        let Some(Commands::Search { keyword, limit }) = cli.command else {
+            panic!("expected search command");
+        };
+        assert_eq!(keyword, "C2040");
+        assert_eq!(limit, 20);
+    }
 }

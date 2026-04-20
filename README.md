@@ -1,8 +1,8 @@
-# syft
+# npnp
 
-Pure Rust LCEDA/EasyEDA downloader and Altium library exporter.
+Normalize Pin Net Pad (`npnp`) is a pure Rust LCEDA/EasyEDA downloader and Altium library exporter.
 
-`syft` can:
+`npnp` can:
 
 - search LCEDA/LCSC components
 - download 3D models as STEP or OBJ/MTL
@@ -12,6 +12,7 @@ Pure Rust LCEDA/EasyEDA downloader and Altium library exporter.
 - batch export libraries from a text file of LCSC IDs
 
 This project is pure Rust. It does not require C#, .NET, or external DLLs for export.
+
 
 ## Requirements
 
@@ -30,13 +31,19 @@ cargo build --release
 Run with Cargo:
 
 ```powershell
-cargo run --quiet --bin syft -- --help
+cargo run --quiet --bin npnp -- --help
 ```
 
 Run the built binary directly:
 
 ```powershell
-.\target\release\syft.exe --help
+.\target\release\npnp.exe --help
+```
+
+Show ready-to-run example commands:
+
+```powershell
+.\target\release\npnp.exe --prompt
 ```
 
 ## Commands
@@ -55,7 +62,7 @@ Top-level commands:
 You can see help for any command with:
 
 ```powershell
-cargo run --quiet --bin syft -- <command> --help
+cargo run --quiet --bin npnp -- <command> --help
 ```
 
 ## Quick Start
@@ -63,25 +70,25 @@ cargo run --quiet --bin syft -- <command> --help
 Search for a component:
 
 ```powershell
-cargo run --quiet --bin syft -- search C2040 --limit 5
+cargo run --quiet --bin npnp -- search C2040 --limit 5
 ```
 
 Export one schematic library:
 
 ```powershell
-cargo run --quiet --bin syft -- export-schlib C2040 --output schlib --force
+cargo run --quiet --bin npnp -- export-schlib C2040 --output schlib --force
 ```
 
 Export one PCB library:
 
 ```powershell
-cargo run --quiet --bin syft -- export-pcblib C2040 --output pcblib --force
+cargo run --quiet --bin npnp -- export-pcblib C2040 --output pcblib --force
 ```
 
 Export both in batch from `ids.txt`:
 
 ```powershell
-cargo run --quiet --bin syft -- batch --input ids.txt --output out --schlib --pcblib --force
+cargo run --quiet --bin npnp -- batch --input ids.txt --output out --schlib --pcblib --force
 ```
 
 ## Single-Component Usage
@@ -91,7 +98,7 @@ cargo run --quiet --bin syft -- batch --input ids.txt --output out --schlib --pc
 Search by keyword, LCSC ID, or part name:
 
 ```powershell
-cargo run --quiet --bin syft -- search TYPE-C --limit 20
+cargo run --quiet --bin npnp -- search TYPE-C --limit 20
 ```
 
 ### `export-schlib`
@@ -99,7 +106,7 @@ cargo run --quiet --bin syft -- search TYPE-C --limit 20
 Export a pure Rust Altium schematic library:
 
 ```powershell
-cargo run --quiet --bin syft -- export-schlib C2040 --index 1 --output schlib --force
+cargo run --quiet --bin npnp -- export-schlib C2040 --index 1 --output schlib --force
 ```
 
 Notes:
@@ -113,7 +120,7 @@ Notes:
 Export a pure Rust Altium PCB library:
 
 ```powershell
-cargo run --quiet --bin syft -- export-pcblib C2040 --index 1 --output pcblib --force
+cargo run --quiet --bin npnp -- export-pcblib C2040 --index 1 --output pcblib --force
 ```
 
 Notes:
@@ -139,7 +146,7 @@ Export a mixed source bundle:
 Example:
 
 ```powershell
-cargo run --quiet --bin syft -- bundle C2040 --index 1 --output bundle --force
+cargo run --quiet --bin npnp -- bundle C2040 --index 1 --output bundle --force
 ```
 
 ### `download-step`
@@ -172,13 +179,13 @@ The parser is tolerant:
 Example:
 
 ```powershell
-cargo run --quiet --bin syft -- batch --input ids.txt --output batch_out --schlib --pcblib --parallel 4 --continue-on-error --force
+cargo run --quiet --bin npnp -- batch --input ids.txt --output batch_out --schlib --pcblib --parallel 4 --continue-on-error --force
 ```
 
 Merged library example:
 
 ```powershell
-cargo run --quiet --bin syft -- batch --input ids.txt --output batch_out --merge --library-name MyLib --schlib --pcblib --continue-on-error
+cargo run --quiet --bin npnp -- batch --input ids.txt --output batch_out --merge --library-name MyLib --schlib --pcblib --continue-on-error
 ```
 
 This writes:
@@ -249,15 +256,15 @@ Current footprint export includes:
 Search and export the first result:
 
 ```powershell
-cargo run --quiet --bin syft -- search RP2040 --limit 5
-cargo run --quiet --bin syft -- export-schlib RP2040 --index 1 --output out\schlib --force
-cargo run --quiet --bin syft -- export-pcblib RP2040 --index 1 --output out\pcblib --force
+cargo run --quiet --bin npnp -- search RP2040 --limit 5
+cargo run --quiet --bin npnp -- export-schlib RP2040 --index 1 --output out\schlib --force
+cargo run --quiet --bin npnp -- export-pcblib RP2040 --index 1 --output out\pcblib --force
 ```
 
 Batch export both libraries from `ids.txt`:
 
 ```powershell
-cargo run --quiet --bin syft -- batch --input ids.txt --output generated\check --schlib --pcblib --force --continue-on-error
+cargo run --quiet --bin npnp -- batch --input ids.txt --output generated\check --schlib --pcblib --force --continue-on-error
 ```
 
 ## Troubleshooting

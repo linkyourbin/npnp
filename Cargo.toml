@@ -1,16 +1,16 @@
 [package]
-name = "syft"
+name = "npnp"
 version = "0.1.0"
 edition = "2024"
 authors = ["linkyourbin"]
-description = "Pure Rust LCEDA acquisition and bundle exporter"
+description = "Normalize Pin Net Pad (npnp): pure Rust LCEDA acquisition and bundle exporter"
 
 [lib]
-name = "syft"
+name = "npnp"
 path = "src/lib.rs"
 
 [[bin]]
-name = "syft"
+name = "npnp"
 path = "src/main.rs"
 
 [dependencies]

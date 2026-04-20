@@ -1803,7 +1803,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("syft_schlib_meta_{timestamp}.SchLib"));
+        let path = std::env::temp_dir().join(format!("npnp_schlib_meta_{timestamp}.SchLib"));
         let metadata = SchlibMetadata {
             description: Some("CPU Core: -; CPU Maximum Speed: 133MHz;".to_string()),
             designator: Some("U?".to_string()),
@@ -1862,7 +1862,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("syft_schlib_multi_{timestamp}.SchLib"));
+        let path = std::env::temp_dir().join(format!("npnp_schlib_multi_{timestamp}.SchLib"));
         let name_a = format!("{}1", "A".repeat(31));
         let name_b = format!("{}2", "A".repeat(31));
         let component_a = build_component_from_payload(&sample_payload(), &name_a).unwrap();
