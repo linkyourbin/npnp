@@ -58,7 +58,7 @@ fn fixture_payloads_write_openable_altium_stream_layouts() {
     assert_eq!(pcb_component.pads.len(), 2);
     assert_eq!(pcb_component.tracks.len(), 1);
     assert_eq!(pcb_component.arcs.len(), 1);
-    assert_eq!(pcb_component.regions.len(), 1);
+    assert_eq!(pcb_component.regions.len(), 3);
     assert_eq!(pcb_component.bodies.len(), 1);
     assert_eq!(pcblib.models.len(), 1);
 

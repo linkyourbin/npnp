@@ -19,6 +19,8 @@ pub const LAYER_MECHANICAL_1: u8 = 57;
 pub const LAYER_MECHANICAL_2: u8 = 58;
 pub const LAYER_MECHANICAL_5: u8 = 61;
 pub const LAYER_MECHANICAL_6: u8 = 62;
+pub const LAYER_MECHANICAL_8: u8 = 64;
+pub const LAYER_MECHANICAL_9: u8 = 65;
 pub const LAYER_MULTI: u8 = 74;
 pub const PAD_HOLE_ROUND: u8 = 0;
 pub const PAD_HOLE_SQUARE: u8 = 1;
@@ -71,6 +73,7 @@ pub struct PcbComponent {
     pub tracks: Vec<PcbTrack>,
     pub regions: Vec<PcbRegion>,
     pub bodies: Vec<PcbComponentBody>,
+    pub extended_primitive_information: Vec<PcbExtendedPrimitiveInfo>,
 }
 impl PcbComponent {
     pub fn primitive_count(&self) -> usize {
@@ -171,6 +174,14 @@ pub struct PcbRegion {
     pub is_tenting_top: bool,
     pub is_tenting_bottom: bool,
     pub is_keepout: bool,
+    pub additional_params: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PcbExtendedPrimitiveInfo {
+    pub primitive_index: usize,
+    pub object_name: String,
+    pub params: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -288,6 +299,19 @@ pub fn write_pcblib(library: &PcbLibrary, output_path: &Path) -> Result<()> {
             &format!("/{section_key}/Data"),
             &component_data_bytes(component),
         )?;
+        if !component.extended_primitive_information.is_empty() {
+            compound.create_storage(&format!("/{section_key}/ExtendedPrimitiveInformation/"))?;
+            write_stream(
+                &mut compound,
+                &format!("/{section_key}/ExtendedPrimitiveInformation/Header"),
+                &storage_header_bytes(component.extended_primitive_information.len() as i32),
+            )?;
+            write_stream(
+                &mut compound,
+                &format!("/{section_key}/ExtendedPrimitiveInformation/Data"),
+                &extended_primitive_information_bytes(component),
+            )?;
+        }
         compound.create_storage(&format!("/{section_key}/UniqueIdPrimitiveInformation/"))?;
         write_stream(
             &mut compound,
@@ -503,10 +527,6 @@ fn component_data_bytes(component: &PcbComponent) -> Vec<u8> {
         writer.write_u8(2);
         write_pad(&mut writer, pad);
     }
-    for body in &component.bodies {
-        writer.write_u8(12);
-        write_component_body(&mut writer, body);
-    }
     for track in &component.tracks {
         writer.write_u8(4);
         write_track(&mut writer, track);
@@ -519,17 +539,35 @@ fn component_data_bytes(component: &PcbComponent) -> Vec<u8> {
         writer.write_u8(11);
         write_region(&mut writer, region);
     }
+    for body in &component.bodies {
+        writer.write_u8(12);
+        write_component_body(&mut writer, body);
+    }
     writer.into_inner()
 }
 
 fn primitive_object_names(component: &PcbComponent) -> Vec<&'static str> {
     let mut names = Vec::with_capacity(component.primitive_count());
     names.extend(std::iter::repeat_n("Pad", component.pads.len()));
-    names.extend(std::iter::repeat_n("ComponentBody", component.bodies.len()));
     names.extend(std::iter::repeat_n("Track", component.tracks.len()));
     names.extend(std::iter::repeat_n("Arc", component.arcs.len()));
     names.extend(std::iter::repeat_n("Region", component.regions.len()));
+    names.extend(std::iter::repeat_n("ComponentBody", component.bodies.len()));
     names
+}
+
+fn extended_primitive_information_bytes(component: &PcbComponent) -> Vec<u8> {
+    let mut writer = BinaryWriter::default();
+    for info in &component.extended_primitive_information {
+        let mut params = Params::default();
+        params.push("PRIMITIVEINDEX", info.primitive_index.to_string());
+        params.push("PRIMITIVEOBJECTID", &info.object_name);
+        for (key, value) in &info.params {
+            params.push(key, value);
+        }
+        writer.write_cstring_param_block(&params);
+    }
+    writer.into_inner()
 }
 
 fn unique_id_primitive_information_bytes(component: &PcbComponent) -> Vec<u8> {
@@ -600,6 +638,9 @@ fn write_region(writer: &mut BinaryWriter, region: &PcbRegion) {
         w.write_u32(0);
         w.write_u8(0);
         let mut params = Params::default();
+        for (key, value) in &region.additional_params {
+            params.push(key, value);
+        }
         if region.kind != 0 {
             params.push("KIND", region.kind.to_string());
         }
@@ -1060,6 +1101,7 @@ mod tests {
             }],
             regions: vec![],
             bodies: vec![],
+            extended_primitive_information: vec![],
         };
         let library = PcbLibrary {
             unique_id: stable_alpha_id("TEST", "library"),
@@ -1093,6 +1135,7 @@ mod tests {
             tracks: vec![],
             regions: vec![],
             bodies: vec![],
+            extended_primitive_information: vec![],
         };
         let library = PcbLibrary {
             unique_id: stable_alpha_id("TEST_MULTI", "library"),

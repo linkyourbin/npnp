@@ -15,6 +15,7 @@ use crate::merge::{
     read_pcblib_records, read_schlib_records, schlib_record_from_component, write_pcblib_records,
     write_schlib_records,
 };
+use crate::pcblib::{PcbLibrary, write_pcblib};
 use crate::util::sanitize_filename;
 use crate::workflow::{
     build_pcblib_library_for_item, build_schlib_component_for_item, export_pcblib, export_schlib,
@@ -185,7 +186,7 @@ struct MergeArtifacts {
     identity: String,
     component_name: String,
     schlib_record: Option<SchlibRecord>,
-    pcblib_library: Option<PcblibRecordLibrary>,
+    pcblib_library: Option<PcbLibrary>,
 }
 
 #[derive(Debug)]
@@ -390,7 +391,7 @@ async fn export_batch_merged_fresh(
 
     let mut used_names = HashSet::new();
     let mut schlib_records = Vec::new();
-    let mut pcblib_library = PcblibRecordLibrary::default();
+    let mut pcblib_library = PcbLibrary::default();
     let mut first_error = None;
 
     for id in ids {
@@ -402,7 +403,7 @@ async fn export_batch_merged_fresh(
                     schlib_records.push(record);
                 }
                 if let Some(library) = artifacts.pcblib_library {
-                    append_pcblib_library(&mut pcblib_library, library);
+                    append_pcblib_library_direct(&mut pcblib_library, library);
                 }
                 summary.success += 1;
                 progress.record_success(&id, Some(&artifacts.component_name));
@@ -428,14 +429,24 @@ async fn export_batch_merged_fresh(
     }
 
     progress.note("Writing merged library files...");
-    write_merged_outputs(
-        targets,
-        &schlib_records,
-        &pcblib_library,
-        &schlib_path,
-        &pcblib_path,
-        &mut summary,
-    )?;
+    if targets.schlib {
+        if schlib_records.is_empty() {
+            return Err(AppError::Other(
+                "cannot write merged SchLib without any components".to_string(),
+            ));
+        }
+        write_schlib_records(&schlib_records, &schlib_path)?;
+        summary.generated_files.push(schlib_path);
+    }
+    if targets.pcblib {
+        if pcblib_library.components.is_empty() {
+            return Err(AppError::Other(
+                "cannot write merged PcbLib without any components".to_string(),
+            ));
+        }
+        write_pcblib(&pcblib_library, &pcblib_path)?;
+        summary.generated_files.push(pcblib_path);
+    }
 
     Ok(summary)
 }
@@ -523,7 +534,7 @@ async fn export_batch_merged_append(
                     schlib_records.push(record);
                 }
                 if let Some(library) = artifacts.pcblib_library {
-                    append_pcblib_library(&mut pcblib_library, library);
+                    append_pcblib_library(&mut pcblib_library, pcblib_records_from_library(&library)?);
                 }
                 summary.success += 1;
                 added_any = true;
@@ -621,7 +632,7 @@ async fn export_merged_component(
 
     let pcblib_library = if targets.pcblib {
         let library = build_pcblib_library_for_item(client, &item, &component_name).await?;
-        Some(pcblib_records_from_library(&library)?)
+        Some(library)
     } else {
         None
     };
@@ -632,6 +643,11 @@ async fn export_merged_component(
         schlib_record,
         pcblib_library,
     })
+}
+
+fn append_pcblib_library_direct(target: &mut PcbLibrary, source: PcbLibrary) {
+    target.components.extend(source.components);
+    target.models.extend(source.models);
 }
 
 fn merged_component_name(
