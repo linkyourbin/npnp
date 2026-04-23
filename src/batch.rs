@@ -9,8 +9,11 @@ use tokio::task::JoinSet;
 
 use crate::error::{AppError, Result};
 use crate::lceda::{LcedaClient, SearchItem};
-use crate::pcblib::{PcbLibrary, write_pcblib};
-use crate::schlib::{Component, write_schlib_library};
+use crate::merge::{
+    PcblibRecordLibrary, SchlibRecord, normalize_lcsc_id, pcblib_records_from_library,
+    read_pcblib_records, read_schlib_records, schlib_record_from_component, write_pcblib_records,
+    write_schlib_records,
+};
 use crate::util::sanitize_filename;
 use crate::workflow::{
     build_pcblib_library_for_item, build_schlib_component_for_item, export_pcblib, export_schlib,
@@ -24,6 +27,7 @@ pub struct BatchOptions {
     pub pcblib: bool,
     pub full: bool,
     pub merge: bool,
+    pub append: bool,
     pub library_name: Option<String>,
     pub parallel: usize,
     pub continue_on_error: bool,
@@ -122,6 +126,11 @@ impl ExportTargets {
         if options.parallel == 0 {
             return Err(AppError::Other("--parallel must be at least 1".to_string()));
         }
+        if options.append && !options.merge {
+            return Err(AppError::Other(
+                "--append is only supported together with --merge".to_string(),
+            ));
+        }
 
         let schlib = options.schlib || options.full;
         let pcblib = options.pcblib || options.full;
@@ -131,6 +140,11 @@ impl ExportTargets {
                     .to_string(),
             ));
         }
+        if options.append && !schlib {
+            return Err(AppError::Other(
+                "--append currently requires --schlib or --full".to_string(),
+            ));
+        }
 
         Ok(Self { schlib, pcblib })
     }
@@ -138,8 +152,9 @@ impl ExportTargets {
 
 #[derive(Debug)]
 struct MergeArtifacts {
-    schlib_component: Option<Component>,
-    pcblib_library: Option<PcbLibrary>,
+    identity: String,
+    schlib_record: Option<SchlibRecord>,
+    pcblib_library: Option<PcblibRecordLibrary>,
 }
 
 async fn export_batch_merged(
@@ -157,7 +172,7 @@ async fn export_batch_merged(
         ));
     }
 
-    let mut summary = BatchSummary {
+    let summary = BatchSummary {
         total: ids.len(),
         skipped: 0,
         success: 0,
@@ -167,22 +182,32 @@ async fn export_batch_merged(
         generated_files: Vec::new(),
     };
 
+    if options.append {
+        return export_batch_merged_append(client, options, targets, ids, summary).await;
+    }
+
     let library_name = resolve_library_name(&options);
+    let merged_pcblib_file = format!("{}.PcbLib", sanitize_filename(&library_name));
+    let schlib_path = options
+        .output
+        .join(format!("{}.SchLib", sanitize_filename(&library_name)));
+    let pcblib_path = options
+        .output
+        .join(format!("{}.PcbLib", sanitize_filename(&library_name)));
+
     let mut used_names = HashSet::new();
-    let mut schlib_components = Vec::new();
-    let mut pcblib_library = PcbLibrary::default();
+    let mut schlib_records = Vec::new();
+    let mut pcblib_library = PcblibRecordLibrary::default();
+    let mut summary = summary;
     let mut first_error = None;
 
-    let merged_pcblib_file = format!("{}.PcbLib", sanitize_filename(&library_name));
-
     for id in ids {
-        let result =
-            export_merged_component(client, targets, &id, &mut used_names, &merged_pcblib_file)
-                .await;
-        match result {
+        match export_merged_component(client, targets, &id, &mut used_names, &merged_pcblib_file)
+            .await
+        {
             Ok(artifacts) => {
-                if let Some(component) = artifacts.schlib_component {
-                    schlib_components.push(component);
+                if let Some(record) = artifacts.schlib_record {
+                    schlib_records.push(record);
                 }
                 if let Some(library) = artifacts.pcblib_library {
                     append_pcblib_library(&mut pcblib_library, library);
@@ -204,31 +229,159 @@ async fn export_batch_merged(
         }
     }
 
-    let mut wrote_any = false;
-    if targets.schlib && !schlib_components.is_empty() {
-        let path = options
-            .output
-            .join(format!("{}.SchLib", sanitize_filename(&library_name)));
-        write_schlib_library(&schlib_components, &path)?;
-        summary.generated_files.push(path);
-        wrote_any = true;
-    }
-    if targets.pcblib && !pcblib_library.components.is_empty() {
-        let path = options
-            .output
-            .join(format!("{}.PcbLib", sanitize_filename(&library_name)));
-        write_pcblib(&pcblib_library, &path)?;
-        summary.generated_files.push(path);
-        wrote_any = true;
-    }
-
-    if !wrote_any {
+    if summary.success == 0 {
         return Err(first_error.unwrap_or_else(|| {
             AppError::Other("no components exported successfully for merged batch".to_string())
         }));
     }
 
+    write_merged_outputs(
+        targets,
+        &schlib_records,
+        &pcblib_library,
+        &schlib_path,
+        &pcblib_path,
+        &mut summary,
+    )?;
+
     Ok(summary)
+}
+
+async fn export_batch_merged_append(
+    client: &LcedaClient,
+    options: BatchOptions,
+    targets: ExportTargets,
+    ids: Vec<String>,
+    mut summary: BatchSummary,
+) -> Result<BatchSummary> {
+    let library_name = resolve_library_name(&options);
+    let merged_pcblib_file = format!("{}.PcbLib", sanitize_filename(&library_name));
+    let schlib_path = options
+        .output
+        .join(format!("{}.SchLib", sanitize_filename(&library_name)));
+    let pcblib_path = options
+        .output
+        .join(format!("{}.PcbLib", sanitize_filename(&library_name)));
+
+    if targets.schlib && targets.pcblib {
+        let sch_exists = schlib_path.exists();
+        let pcb_exists = pcblib_path.exists();
+        if sch_exists != pcb_exists {
+            return Err(AppError::Other(
+                "append mode requires both merged SchLib and PcbLib to exist already, or neither"
+                    .to_string(),
+            ));
+        }
+    }
+
+    let mut schlib_records = if targets.schlib && schlib_path.exists() {
+        read_schlib_records(&schlib_path)?
+    } else {
+        Vec::new()
+    };
+    let mut pcblib_library = if targets.pcblib && pcblib_path.exists() {
+        read_pcblib_records(&pcblib_path)?
+    } else {
+        PcblibRecordLibrary::default()
+    };
+
+    let mut known_identities = HashSet::new();
+    let mut used_names = HashSet::new();
+    for record in &schlib_records {
+        used_names.insert(record.name.to_ascii_lowercase());
+        if let Some(identity) = record.identity.as_deref().and_then(normalize_lcsc_id) {
+            known_identities.insert(identity);
+        }
+    }
+    for component in &pcblib_library.components {
+        used_names.insert(component.name.to_ascii_lowercase());
+    }
+
+    let mut added_any = false;
+    let mut first_error = None;
+
+    for id in ids {
+        let normalized_id = normalize_lcsc_id(&id).unwrap_or_else(|| id.clone());
+        if known_identities.contains(&normalized_id) {
+            summary.skipped += 1;
+            println!("SKIP {id}: already present");
+            continue;
+        }
+
+        match export_merged_component(client, targets, &id, &mut used_names, &merged_pcblib_file)
+            .await
+        {
+            Ok(artifacts) => {
+                known_identities.insert(artifacts.identity);
+                if let Some(record) = artifacts.schlib_record {
+                    schlib_records.push(record);
+                }
+                if let Some(library) = artifacts.pcblib_library {
+                    append_pcblib_library(&mut pcblib_library, library);
+                }
+                summary.success += 1;
+                added_any = true;
+                println!("OK {id}");
+            }
+            Err(err) => {
+                summary.failed += 1;
+                summary.failed_ids.push(id.clone());
+                eprintln!("FAILED {id}: {err}");
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+                if !options.continue_on_error {
+                    return Err(first_error.unwrap());
+                }
+            }
+        }
+    }
+
+    if added_any {
+        write_merged_outputs(
+            targets,
+            &schlib_records,
+            &pcblib_library,
+            &schlib_path,
+            &pcblib_path,
+            &mut summary,
+        )?;
+    } else if summary.failed > 0 && !options.continue_on_error {
+        return Err(
+            first_error.unwrap_or_else(|| AppError::Other("append merge failed".to_string()))
+        );
+    }
+
+    Ok(summary)
+}
+
+fn write_merged_outputs(
+    targets: ExportTargets,
+    schlib_records: &[SchlibRecord],
+    pcblib_library: &PcblibRecordLibrary,
+    schlib_path: &Path,
+    pcblib_path: &Path,
+    summary: &mut BatchSummary,
+) -> Result<()> {
+    if targets.schlib {
+        if schlib_records.is_empty() {
+            return Err(AppError::Other(
+                "cannot write merged SchLib without any components".to_string(),
+            ));
+        }
+        write_schlib_records(schlib_records, schlib_path)?;
+        summary.generated_files.push(schlib_path.to_path_buf());
+    }
+    if targets.pcblib {
+        if pcblib_library.components.is_empty() {
+            return Err(AppError::Other(
+                "cannot write merged PcbLib without any components".to_string(),
+            ));
+        }
+        write_pcblib_records(pcblib_library, pcblib_path)?;
+        summary.generated_files.push(pcblib_path.to_path_buf());
+    }
+    Ok(())
 }
 
 async fn export_merged_component(
@@ -240,29 +393,35 @@ async fn export_merged_component(
 ) -> Result<MergeArtifacts> {
     let item = client.select_item(lcsc_id, 1).await?;
     let component_name = merged_component_name(&item, lcsc_id, used_names);
+    let identity = item
+        .lcsc_id()
+        .as_deref()
+        .and_then(normalize_lcsc_id)
+        .unwrap_or_else(|| lcsc_id.to_string());
 
-    let schlib_component = if targets.schlib {
-        Some(
-            build_schlib_component_for_item(
-                client,
-                &item,
-                &component_name,
-                Some(merged_pcblib_file),
-            )
-            .await?,
+    let schlib_record = if targets.schlib {
+        let component = build_schlib_component_for_item(
+            client,
+            &item,
+            &component_name,
+            Some(merged_pcblib_file),
         )
+        .await?;
+        Some(schlib_record_from_component(&component)?)
     } else {
         None
     };
 
     let pcblib_library = if targets.pcblib {
-        Some(build_pcblib_library_for_item(client, &item, &component_name).await?)
+        let library = build_pcblib_library_for_item(client, &item, &component_name).await?;
+        Some(pcblib_records_from_library(&library)?)
     } else {
         None
     };
 
     Ok(MergeArtifacts {
-        schlib_component,
+        identity,
+        schlib_record,
         pcblib_library,
     })
 }
@@ -295,7 +454,7 @@ fn merged_component_name(
     }
 }
 
-fn append_pcblib_library(target: &mut PcbLibrary, source: PcbLibrary) {
+fn append_pcblib_library(target: &mut PcblibRecordLibrary, source: PcblibRecordLibrary) {
     target.components.extend(source.components);
     target.models.extend(source.models);
 }
@@ -505,6 +664,7 @@ mod tests {
             pcblib: false,
             full: false,
             merge: true,
+            append: false,
             library_name: None,
             parallel: 1,
             continue_on_error: false,

@@ -102,6 +102,8 @@ pub enum Commands {
         #[arg(long)]
         merge: bool,
         #[arg(long)]
+        append: bool,
+        #[arg(long)]
         library_name: Option<String>,
         #[arg(long, default_value_t = 4)]
         parallel: usize,

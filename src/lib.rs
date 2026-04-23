@@ -4,6 +4,7 @@ pub mod cli;
 pub mod error;
 pub mod footprint;
 pub mod lceda;
+pub mod merge;
 pub mod pcblib;
 pub mod schlib;
 pub mod util;

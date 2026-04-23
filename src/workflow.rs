@@ -364,6 +364,15 @@ fn build_schlib_metadata(
             ])
         });
 
+    if let Some(component_id) = item.lcsc_id() {
+        push_schlib_parameter(
+            &mut parameters,
+            &mut seen_names,
+            "NPNP_COMPONENT_ID",
+            component_id,
+        );
+    }
+
     if let Some(footprint_name) = resolved_footprint_name.as_deref() {
         push_schlib_parameter(
             &mut parameters,
