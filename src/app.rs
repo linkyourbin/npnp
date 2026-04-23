@@ -241,6 +241,11 @@ fn prompt_examples(invoked_as: &str) -> String {
             "  {command} batch --input ids.txt --output generated\\merged --merge --library-name MyLib --full --continue-on-error"
         ),
         "",
+        "Append new parts into an existing merged library",
+        &format!(
+            "  {command} batch --input new_ids.txt --output generated\\merged --merge --append --library-name MyLib --full --continue-on-error"
+        ),
+        "",
 ]
     .join("\n")
 }

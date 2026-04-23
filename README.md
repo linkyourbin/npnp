@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="Cargo.toml"><img src="https://img.shields.io/badge/version-0.1.2-e05d44?style=flat-square" alt="version 0.1.2"></a>
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/version-0.1.3-e05d44?style=flat-square" alt="version 0.1.3"></a>
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-PolyForm--NC%201.0-f08c5a?style=flat-square" alt="license PolyForm NC 1.0"></a>
   <a href=".github/workflows/windows-release.yml"><img src="https://img.shields.io/badge/platform-Windows-2ea44f?style=flat-square" alt="platform Windows"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-edition%202024-f28d1a?style=flat-square" alt="rust edition 2024"></a>
@@ -27,6 +27,8 @@ Normalize Pin Net Pad (`npnp`) is an LCEDA/EasyEDA downloader and Altium library
 - Embed STEP models into PCB libraries when upstream STEP data is available.
 - Batch export many LCSC IDs from a text file.
 - Export either one file per component or merged library pairs.
+- Append new components into an existing merged `npnp` library pair without duplicating existing LCSC IDs.
+- Show live batch progress with counts, active workers, elapsed time, and the most recently processed component.
 - Resume non-merged batch exports with checkpoint files.
 - Retry transient LCEDA/EasyEDA request failures automatically.
 
@@ -491,7 +493,7 @@ Batch export Altium libraries from a text file containing LCSC IDs.
 Usage:
 
 ```powershell
-npnp batch --input <FILE> [--output <DIR>] [--schlib] [--pcblib] [--full] [--merge] [--library-name <NAME>] [--parallel <N>] [--continue-on-error] [--force]
+npnp batch --input <FILE> [--output <DIR>] [--schlib] [--pcblib] [--full] [--merge] [--append] [--library-name <NAME>] [--parallel <N>] [--continue-on-error] [--force]
 ```
 
 Short input flag:
@@ -552,6 +554,12 @@ Write only a merged PCB library:
 npnp batch --input ids.txt --output merged_pcblib --merge --library-name MyPcbLib --pcblib --continue-on-error --force
 ```
 
+Append only the missing parts into an existing merged library pair created by `npnp`:
+
+```powershell
+npnp batch --input new_ids.txt --output merged_out --merge --append --library-name MyLib --full --continue-on-error
+```
+
 Batch options:
 
 - `--input <FILE>` or `-i <FILE>` is required.
@@ -560,6 +568,7 @@ Batch options:
 - `--pcblib` exports PCB libraries.
 - `--full` exports both schematic and PCB libraries.
 - `--merge` writes one merged library per selected target instead of one file per component.
+- `--append` adds only missing components into an existing merged `npnp` library pair and skips duplicate LCSC IDs.
 - `--library-name <NAME>` sets the merged output filename prefix.
 - `--parallel <N>` sets concurrent jobs for non-merged batch export. Default: `4`.
 - `--continue-on-error` keeps processing remaining IDs if one ID fails.
@@ -592,6 +601,7 @@ Checkpoint behavior:
 - Completed IDs are written to `.checkpoint`.
 - Later runs skip completed IDs unless `--force` is used.
 - Merged batch exports rebuild the merged output and do not use the non-merged checkpoint layout.
+- Merged `--append` runs reuse the existing merged `npnp` libraries, skip duplicate LCSC IDs, and write back one updated merged pair.
 
 ## Recommended Workflows
 
@@ -628,6 +638,12 @@ Merged library verification workflow:
 
 ```powershell
 npnp batch --input ids.txt --output generated\merged_check --merge --library-name MyLib --full --force --continue-on-error
+```
+
+Merged append workflow:
+
+```powershell
+npnp batch --input more_ids.txt --output generated\merged_check --merge --append --library-name MyLib --full --continue-on-error
 ```
 
 ## Merge Output Screenshots
@@ -680,6 +696,13 @@ PCB library screenshots:
 - The generated libraries should be opened in Altium Designer for final visual verification before production use.
 
 ## Troubleshooting
+
+Batch terminal progress:
+
+- `batch` shows a live progress line with `ok`, `skip`, `fail`, `active`, elapsed time, and the last processed component.
+- `SKIP ...` and `FAILED ...` lines are printed as separate events during the run.
+- Merged and append runs print extra stage lines when they load existing libraries or write the final merged outputs.
+
 
 No valid IDs found in batch input:
 

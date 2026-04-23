@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -86,11 +87,28 @@ pub async fn export_batch(client: &LcedaClient, options: BatchOptions) -> Result
         generated_files: Vec::new(),
     };
 
+    let actual_parallel = if options.parallel > 1 && pending.len() > 1 {
+        options.parallel
+    } else {
+        1
+    };
+    let mut progress = BatchProgress::new(
+        summary.total,
+        actual_parallel,
+        batch_mode_label(&options),
+        targets,
+        &options.output,
+    );
+    if summary.skipped > 0 {
+        progress.seed_skipped(summary.skipped, "checkpoint");
+    }
+
     if pending.is_empty() {
+        progress.finish();
         return Ok(summary);
     }
 
-    if options.parallel > 1 && pending.len() > 1 {
+    if actual_parallel > 1 {
         run_parallel(
             client.clone(),
             options.clone(),
@@ -98,6 +116,7 @@ pub async fn export_batch(client: &LcedaClient, options: BatchOptions) -> Result
             &checkpoint_path,
             pending,
             &mut summary,
+            &mut progress,
         )
         .await?;
     } else {
@@ -108,10 +127,12 @@ pub async fn export_batch(client: &LcedaClient, options: BatchOptions) -> Result
             &checkpoint_path,
             pending,
             &mut summary,
+            &mut progress,
         )
         .await?;
     }
 
+    progress.finish();
     Ok(summary)
 }
 
@@ -148,13 +169,161 @@ impl ExportTargets {
 
         Ok(Self { schlib, pcblib })
     }
+
+    fn label(self) -> &'static str {
+        match (self.schlib, self.pcblib) {
+            (true, true) => "SchLib+PcbLib",
+            (true, false) => "SchLib",
+            (false, true) => "PcbLib",
+            (false, false) => "none",
+        }
+    }
 }
 
 #[derive(Debug)]
 struct MergeArtifacts {
     identity: String,
+    component_name: String,
     schlib_record: Option<SchlibRecord>,
     pcblib_library: Option<PcblibRecordLibrary>,
+}
+
+#[derive(Debug)]
+struct ExportedComponent {
+    display_name: String,
+}
+
+struct BatchProgress {
+    total: usize,
+    completed: usize,
+    success: usize,
+    skipped: usize,
+    failed: usize,
+    parallel: usize,
+    started_at: Instant,
+    last_subject: Option<String>,
+    last_render_width: usize,
+}
+
+impl BatchProgress {
+    fn new(
+        total: usize,
+        parallel: usize,
+        mode_label: &str,
+        targets: ExportTargets,
+        output: &Path,
+    ) -> Self {
+        eprintln!(
+            "Batch mode: {mode_label} | targets: {} | parallel: {}",
+            targets.label(),
+            parallel.max(1)
+        );
+        eprintln!("Output: {}", output.display());
+
+        let mut progress = Self {
+            total,
+            completed: 0,
+            success: 0,
+            skipped: 0,
+            failed: 0,
+            parallel: parallel.max(1),
+            started_at: Instant::now(),
+            last_subject: None,
+            last_render_width: 0,
+        };
+        progress.render();
+        progress
+    }
+
+    fn seed_skipped(&mut self, count: usize, reason: &str) {
+        if count == 0 {
+            return;
+        }
+        self.completed = (self.completed + count).min(self.total);
+        self.skipped += count;
+        self.note(format!("Pre-skipped {count} item(s) from {reason}"));
+    }
+
+    fn note(&mut self, message: impl AsRef<str>) {
+        self.clear_status_line();
+        eprintln!("{}", message.as_ref());
+        self.render();
+    }
+
+    fn record_success(&mut self, id: &str, detail: Option<&str>) {
+        self.completed = (self.completed + 1).min(self.total);
+        self.success += 1;
+        self.last_subject = Some(format_subject(id, detail));
+        self.render();
+    }
+
+    fn record_skip(&mut self, id: &str, reason: &str) {
+        self.completed = (self.completed + 1).min(self.total);
+        self.skipped += 1;
+        self.last_subject = Some(format_subject(id, None));
+        self.note(format!("SKIP {id}: {reason}"));
+    }
+
+    fn record_failure(&mut self, id: &str, error: &AppError) {
+        self.completed = (self.completed + 1).min(self.total);
+        self.failed += 1;
+        self.last_subject = Some(format_subject(id, None));
+        self.note(format!("FAILED {id}: {error}"));
+    }
+
+    fn finish(&mut self) {
+        if self.last_render_width > 0 {
+            eprintln!();
+            self.last_render_width = 0;
+        }
+    }
+
+    fn render(&mut self) {
+        let bar_width = 24usize;
+        let filled = if self.total == 0 {
+            bar_width
+        } else {
+            (self.completed * bar_width + self.total / 2) / self.total
+        }
+        .min(bar_width);
+        let remaining = bar_width.saturating_sub(filled);
+        let last = self.last_subject.as_deref().unwrap_or("-");
+        let message = format!(
+            "[{}{}] {}/{} | ok:{} skip:{} fail:{} | active:{} | last:{} | elapsed:{}",
+            "#".repeat(filled),
+            "-".repeat(remaining),
+            self.completed,
+            self.total,
+            self.success,
+            self.skipped,
+            self.failed,
+            self.active_count(),
+            last,
+            format_elapsed(self.started_at.elapsed().as_secs())
+        );
+        self.draw_status_line(&message);
+    }
+
+    fn active_count(&self) -> usize {
+        self.total.saturating_sub(self.completed).min(self.parallel)
+    }
+
+    fn clear_status_line(&mut self) {
+        if self.last_render_width == 0 {
+            return;
+        }
+        eprint!("\r{}\r", " ".repeat(self.last_render_width));
+        let _ = io::stderr().flush();
+        self.last_render_width = 0;
+    }
+
+    fn draw_status_line(&mut self, message: &str) {
+        let current_width = message.chars().count();
+        let padding = self.last_render_width.saturating_sub(current_width);
+        eprint!("\r{}{}", message, " ".repeat(padding));
+        let _ = io::stderr().flush();
+        self.last_render_width = current_width;
+    }
 }
 
 async fn export_batch_merged(
@@ -182,10 +351,32 @@ async fn export_batch_merged(
         generated_files: Vec::new(),
     };
 
-    if options.append {
-        return export_batch_merged_append(client, options, targets, ids, summary).await;
-    }
+    let mut progress = BatchProgress::new(
+        summary.total,
+        1,
+        batch_mode_label(&options),
+        targets,
+        &options.output,
+    );
 
+    let result = if options.append {
+        export_batch_merged_append(client, options, targets, ids, summary, &mut progress).await
+    } else {
+        export_batch_merged_fresh(client, options, targets, ids, summary, &mut progress).await
+    };
+
+    progress.finish();
+    result
+}
+
+async fn export_batch_merged_fresh(
+    client: &LcedaClient,
+    options: BatchOptions,
+    targets: ExportTargets,
+    ids: Vec<String>,
+    mut summary: BatchSummary,
+    progress: &mut BatchProgress,
+) -> Result<BatchSummary> {
     let library_name = resolve_library_name(&options);
     let merged_pcblib_file = format!("{}.PcbLib", sanitize_filename(&library_name));
     let schlib_path = options
@@ -195,10 +386,11 @@ async fn export_batch_merged(
         .output
         .join(format!("{}.PcbLib", sanitize_filename(&library_name)));
 
+    progress.note(format!("Library: {library_name}"));
+
     let mut used_names = HashSet::new();
     let mut schlib_records = Vec::new();
     let mut pcblib_library = PcblibRecordLibrary::default();
-    let mut summary = summary;
     let mut first_error = None;
 
     for id in ids {
@@ -213,12 +405,12 @@ async fn export_batch_merged(
                     append_pcblib_library(&mut pcblib_library, library);
                 }
                 summary.success += 1;
-                println!("OK {id}");
+                progress.record_success(&id, Some(&artifacts.component_name));
             }
             Err(err) => {
                 summary.failed += 1;
                 summary.failed_ids.push(id.clone());
-                eprintln!("FAILED {id}: {err}");
+                progress.record_failure(&id, &err);
                 if first_error.is_none() {
                     first_error = Some(err);
                 }
@@ -235,6 +427,7 @@ async fn export_batch_merged(
         }));
     }
 
+    progress.note("Writing merged library files...");
     write_merged_outputs(
         targets,
         &schlib_records,
@@ -253,6 +446,7 @@ async fn export_batch_merged_append(
     targets: ExportTargets,
     ids: Vec<String>,
     mut summary: BatchSummary,
+    progress: &mut BatchProgress,
 ) -> Result<BatchSummary> {
     let library_name = resolve_library_name(&options);
     let merged_pcblib_file = format!("{}.PcbLib", sanitize_filename(&library_name));
@@ -262,6 +456,8 @@ async fn export_batch_merged_append(
     let pcblib_path = options
         .output
         .join(format!("{}.PcbLib", sanitize_filename(&library_name)));
+
+    progress.note(format!("Library: {library_name}"));
 
     if targets.schlib && targets.pcblib {
         let sch_exists = schlib_path.exists();
@@ -285,6 +481,16 @@ async fn export_batch_merged_append(
         PcblibRecordLibrary::default()
     };
 
+    if schlib_records.is_empty() && pcblib_library.components.is_empty() {
+        progress.note("Append mode: no existing merged npnp library found, creating a new one");
+    } else {
+        progress.note(format!(
+            "Loaded existing merged output: SchLib components: {} | PcbLib components: {}",
+            schlib_records.len(),
+            pcblib_library.components.len()
+        ));
+    }
+
     let mut known_identities = HashSet::new();
     let mut used_names = HashSet::new();
     for record in &schlib_records {
@@ -304,7 +510,7 @@ async fn export_batch_merged_append(
         let normalized_id = normalize_lcsc_id(&id).unwrap_or_else(|| id.clone());
         if known_identities.contains(&normalized_id) {
             summary.skipped += 1;
-            println!("SKIP {id}: already present");
+            progress.record_skip(&id, "already present");
             continue;
         }
 
@@ -321,12 +527,12 @@ async fn export_batch_merged_append(
                 }
                 summary.success += 1;
                 added_any = true;
-                println!("OK {id}");
+                progress.record_success(&id, Some(&artifacts.component_name));
             }
             Err(err) => {
                 summary.failed += 1;
                 summary.failed_ids.push(id.clone());
-                eprintln!("FAILED {id}: {err}");
+                progress.record_failure(&id, &err);
                 if first_error.is_none() {
                     first_error = Some(err);
                 }
@@ -338,6 +544,7 @@ async fn export_batch_merged_append(
     }
 
     if added_any {
+        progress.note("Writing merged library files...");
         write_merged_outputs(
             targets,
             &schlib_records,
@@ -421,6 +628,7 @@ async fn export_merged_component(
 
     Ok(MergeArtifacts {
         identity,
+        component_name,
         schlib_record,
         pcblib_library,
     })
@@ -484,18 +692,19 @@ async fn run_sequential(
     checkpoint_path: &Path,
     pending: Vec<String>,
     summary: &mut BatchSummary,
+    progress: &mut BatchProgress,
 ) -> Result<()> {
     for id in pending {
         match export_component(&client, &options, targets, &id).await {
-            Ok(()) => {
+            Ok(exported) => {
                 append_checkpoint(checkpoint_path, &id)?;
                 summary.success += 1;
-                println!("OK {id}");
+                progress.record_success(&id, Some(&exported.display_name));
             }
             Err(err) => {
                 summary.failed += 1;
                 summary.failed_ids.push(id.clone());
-                eprintln!("FAILED {id}: {err}");
+                progress.record_failure(&id, &err);
                 if !options.continue_on_error {
                     return Err(err);
                 }
@@ -513,6 +722,7 @@ async fn run_parallel(
     checkpoint_path: &Path,
     pending: Vec<String>,
     summary: &mut BatchSummary,
+    progress: &mut BatchProgress,
 ) -> Result<()> {
     let semaphore = Arc::new(Semaphore::new(options.parallel));
     let mut join_set = JoinSet::new();
@@ -534,15 +744,15 @@ async fn run_parallel(
     let mut first_error = None;
     while let Some(joined) = join_set.join_next().await {
         match joined {
-            Ok((id, Ok(()))) => {
+            Ok((id, Ok(exported))) => {
                 append_checkpoint(checkpoint_path, &id)?;
                 summary.success += 1;
-                println!("OK {id}");
+                progress.record_success(&id, Some(&exported.display_name));
             }
             Ok((id, Err(err))) => {
                 summary.failed += 1;
                 summary.failed_ids.push(id.clone());
-                eprintln!("FAILED {id}: {err}");
+                progress.record_failure(&id, &err);
                 if first_error.is_none() {
                     first_error = Some(err);
                 }
@@ -550,7 +760,7 @@ async fn run_parallel(
             Err(err) => {
                 summary.failed += 1;
                 let batch_err = AppError::Other(format!("batch task join failed: {err}"));
-                eprintln!("FAILED batch task: {batch_err}");
+                progress.record_failure("<join>", &batch_err);
                 if first_error.is_none() {
                     first_error = Some(batch_err);
                 }
@@ -570,8 +780,9 @@ async fn export_component(
     options: &BatchOptions,
     targets: ExportTargets,
     lcsc_id: &str,
-) -> Result<()> {
+) -> Result<ExportedComponent> {
     let item = client.select_item(lcsc_id, 1).await?;
+    let display_name = item.display_name().to_string();
 
     if targets.schlib {
         let schlib_dir = options.output.join("schlib");
@@ -583,7 +794,7 @@ async fn export_component(
         export_pcblib(client, &item, &pcblib_dir, options.force).await?;
     }
 
-    Ok(())
+    Ok(ExportedComponent { display_name })
 }
 
 fn load_checkpoint(path: &Path) -> Result<HashSet<String>> {
@@ -638,9 +849,41 @@ fn parse_lcsc_ids(text: &str) -> Vec<String> {
     ids
 }
 
+fn batch_mode_label(options: &BatchOptions) -> &'static str {
+    match (options.merge, options.append) {
+        (true, true) => "merge+append",
+        (true, false) => "merge",
+        (false, _) => "batch",
+    }
+}
+
+fn format_subject(id: &str, detail: Option<&str>) -> String {
+    let mut text = match detail {
+        Some(detail) if !detail.trim().is_empty() => format!("{id} {detail}"),
+        _ => id.to_string(),
+    };
+    if text.chars().count() > 52 {
+        text = format!("{}...", text.chars().take(49).collect::<String>());
+    }
+    text
+}
+
+fn format_elapsed(seconds: u64) -> String {
+    let hours = seconds / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    let secs = seconds % 60;
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{secs:02}")
+    } else {
+        format!("{minutes:02}:{secs:02}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{BatchOptions, parse_lcsc_ids, resolve_library_name};
+    use super::{
+        BatchOptions, format_elapsed, format_subject, parse_lcsc_ids, resolve_library_name,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -672,5 +915,15 @@ mod tests {
         };
 
         assert_eq!(resolve_library_name(&options), "ids");
+    }
+
+    #[test]
+    fn formats_progress_subject_with_component_name() {
+        assert_eq!(format_subject("C2040", Some("RP2040")), "C2040 RP2040");
+    }
+
+    #[test]
+    fn formats_elapsed_time_without_hours() {
+        assert_eq!(format_elapsed(65), "01:05");
     }
 }
