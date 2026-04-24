@@ -19,6 +19,7 @@ use crate::pcblib::{PcbLibrary, write_pcblib};
 use crate::util::sanitize_filename;
 use crate::workflow::{
     build_pcblib_library_for_item, build_schlib_component_for_item, export_pcblib, export_schlib,
+    resolved_footprint_name,
 };
 
 #[derive(Debug, Clone)]
@@ -389,14 +390,22 @@ async fn export_batch_merged_fresh(
 
     progress.note(format!("Library: {library_name}"));
 
-    let mut used_names = HashSet::new();
+    let mut used_symbol_names = HashSet::new();
+    let mut used_footprint_names = HashSet::new();
     let mut schlib_records = Vec::new();
     let mut pcblib_library = PcbLibrary::default();
     let mut first_error = None;
 
     for id in ids {
-        match export_merged_component(client, targets, &id, &mut used_names, &merged_pcblib_file)
-            .await
+        match export_merged_component(
+            client,
+            targets,
+            &id,
+            &mut used_symbol_names,
+            &mut used_footprint_names,
+            &merged_pcblib_file,
+        )
+        .await
         {
             Ok(artifacts) => {
                 if let Some(record) = artifacts.schlib_record {
@@ -503,15 +512,16 @@ async fn export_batch_merged_append(
     }
 
     let mut known_identities = HashSet::new();
-    let mut used_names = HashSet::new();
+    let mut used_symbol_names = HashSet::new();
+    let mut used_footprint_names = HashSet::new();
     for record in &schlib_records {
-        used_names.insert(record.name.to_ascii_lowercase());
+        used_symbol_names.insert(record.name.to_ascii_lowercase());
         if let Some(identity) = record.identity.as_deref().and_then(normalize_lcsc_id) {
             known_identities.insert(identity);
         }
     }
     for component in &pcblib_library.components {
-        used_names.insert(component.name.to_ascii_lowercase());
+        used_footprint_names.insert(component.name.to_ascii_lowercase());
     }
 
     let mut added_any = false;
@@ -525,8 +535,15 @@ async fn export_batch_merged_append(
             continue;
         }
 
-        match export_merged_component(client, targets, &id, &mut used_names, &merged_pcblib_file)
-            .await
+        match export_merged_component(
+            client,
+            targets,
+            &id,
+            &mut used_symbol_names,
+            &mut used_footprint_names,
+            &merged_pcblib_file,
+        )
+        .await
         {
             Ok(artifacts) => {
                 known_identities.insert(artifacts.identity);
@@ -606,22 +623,30 @@ async fn export_merged_component(
     client: &LcedaClient,
     targets: ExportTargets,
     lcsc_id: &str,
-    used_names: &mut HashSet<String>,
+    used_symbol_names: &mut HashSet<String>,
+    used_footprint_names: &mut HashSet<String>,
     merged_pcblib_file: &str,
 ) -> Result<MergeArtifacts> {
     let item = client.select_item(lcsc_id, 1).await?;
-    let component_name = merged_component_name(&item, lcsc_id, used_names);
+    let component_name = merged_symbol_component_name(&item, lcsc_id, used_symbol_names);
     let identity = item
         .lcsc_id()
         .as_deref()
         .and_then(normalize_lcsc_id)
         .unwrap_or_else(|| lcsc_id.to_string());
+    let footprint_name = if let Some(footprint_uuid) = item.footprint_uuid() {
+        let footprint_data = client.component_detail(&footprint_uuid).await?;
+        merged_footprint_name(&item, &footprint_data, lcsc_id, used_footprint_names)
+    } else {
+        merged_symbol_component_name(&item, lcsc_id, used_footprint_names)
+    };
 
     let schlib_record = if targets.schlib {
         let component = build_schlib_component_for_item(
             client,
             &item,
             &component_name,
+            Some(&footprint_name),
             Some(merged_pcblib_file),
         )
         .await?;
@@ -631,7 +656,7 @@ async fn export_merged_component(
     };
 
     let pcblib_library = if targets.pcblib {
-        let library = build_pcblib_library_for_item(client, &item, &component_name).await?;
+        let library = build_pcblib_library_for_item(client, &item, &footprint_name).await?;
         Some(library)
     } else {
         None
@@ -650,7 +675,7 @@ fn append_pcblib_library_direct(target: &mut PcbLibrary, source: PcbLibrary) {
     target.models.extend(source.models);
 }
 
-fn merged_component_name(
+fn merged_symbol_component_name(
     item: &SearchItem,
     lcsc_id: &str,
     used_names: &mut HashSet<String>,
@@ -660,6 +685,34 @@ fn merged_component_name(
     let normalized_base = base.to_ascii_lowercase();
     if used_names.insert(normalized_base) {
         return base.to_string();
+    }
+
+    let with_id = format!("{base}_{lcsc_id}");
+    let normalized_with_id = with_id.to_ascii_lowercase();
+    if used_names.insert(normalized_with_id) {
+        return with_id;
+    }
+
+    let mut index = 2usize;
+    loop {
+        let candidate = format!("{base}_{lcsc_id}_{index}");
+        if used_names.insert(candidate.to_ascii_lowercase()) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn merged_footprint_name(
+    item: &SearchItem,
+    footprint_data: &serde_json::Value,
+    lcsc_id: &str,
+    used_names: &mut HashSet<String>,
+) -> String {
+    let base = resolved_footprint_name(item, footprint_data);
+    let normalized_base = base.to_ascii_lowercase();
+    if used_names.insert(normalized_base) {
+        return base;
     }
 
     let with_id = format!("{base}_{lcsc_id}");

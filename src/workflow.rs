@@ -111,14 +111,29 @@ pub async fn export_easyeda_sources(
     Ok(exported)
 }
 
-fn resolved_component_name(item: &SearchItem, payload: &Value) -> String {
-    if item.display_name().trim().is_empty() {
-        nested_string(payload, &["result", "display_title"])
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| item.display_name().to_string())
-    } else {
-        item.display_name().to_string()
-    }
+fn resolved_symbol_component_name(item: &SearchItem, payload: &Value) -> String {
+    first_non_empty([
+        (!item.display_name().trim().is_empty()).then(|| item.display_name().to_string()),
+        nested_string(payload, &["result", "display_title"]),
+        nested_string(payload, &["display_title"]),
+        nested_string(payload, &["result", "title"]),
+        nested_string(payload, &["title"]),
+    ])
+    .unwrap_or_else(|| "component".to_string())
+}
+
+pub(crate) fn resolved_footprint_name(item: &SearchItem, payload: &Value) -> String {
+    first_non_empty([
+        nested_string(payload, &["result", "display_title"]),
+        nested_string(payload, &["display_title"]),
+        nested_string(payload, &["result", "package"]),
+        nested_string(payload, &["package"]),
+        nested_string(&item.raw, &["footprint", "display_title"]),
+        nested_string(&item.raw, &["attributes", "Supplier Footprint"]),
+        nested_string(&item.raw, &["attributes", "Footprint"]),
+        (!item.display_name().trim().is_empty()).then(|| item.display_name().to_string()),
+    ])
+    .unwrap_or_else(|| "footprint".to_string())
 }
 
 async fn load_step_bytes_for_pcblib(
@@ -193,19 +208,20 @@ fn build_schlib_component_from_detail(
 pub async fn build_pcblib_library_for_item(
     client: &LcedaClient,
     item: &SearchItem,
-    component_name: &str,
+    footprint_name: &str,
 ) -> Result<PcbLibrary> {
     let footprint_uuid = item
         .footprint_uuid()
         .ok_or(AppError::MissingSymbolOrFootprint)?;
     let footprint_data = client.component_detail(&footprint_uuid).await?;
-    build_pcblib_library_from_detail(client, item, &footprint_data, component_name).await
+    build_pcblib_library_from_detail(client, item, &footprint_data, footprint_name).await
 }
 
 pub async fn build_schlib_component_for_item(
     client: &LcedaClient,
     item: &SearchItem,
     component_name: &str,
+    footprint_model_name: Option<&str>,
     footprint_library_file: Option<&str>,
 ) -> Result<Component> {
     let symbol_uuid = item
@@ -216,7 +232,7 @@ pub async fn build_schlib_component_for_item(
         item,
         &symbol_data,
         component_name,
-        Some(component_name),
+        footprint_model_name,
         footprint_library_file,
     )
 }
@@ -231,14 +247,14 @@ pub async fn export_pcblib(
         .footprint_uuid()
         .ok_or(AppError::MissingSymbolOrFootprint)?;
     let footprint_data = client.component_detail(&footprint_uuid).await?;
-    let component_name = resolved_component_name(item, &footprint_data);
-    let out_file = out_dir.join(format!("{}.PcbLib", sanitize_filename(&component_name)));
+    let footprint_name = resolved_footprint_name(item, &footprint_data);
+    let out_file = out_dir.join(format!("{}.PcbLib", sanitize_filename(&footprint_name)));
     if out_file.exists() && !force {
         return Ok(out_file);
     }
 
     let library =
-        build_pcblib_library_from_detail(client, item, &footprint_data, &component_name).await?;
+        build_pcblib_library_from_detail(client, item, &footprint_data, &footprint_name).await?;
     write_pcblib(&library, &out_file)?;
     Ok(out_file)
 }
@@ -254,7 +270,7 @@ pub async fn export_schlib(
         .symbol_uuid()
         .ok_or(AppError::MissingSymbolOrFootprint)?;
     let symbol_data = client.component_detail(&symbol_uuid).await?;
-    let component_name = resolved_component_name(item, &symbol_data);
+    let component_name = resolved_symbol_component_name(item, &symbol_data);
     let out_file = out_dir.join(format!("{}.SchLib", sanitize_filename(&component_name)));
     if out_file.exists() && !force {
         return Ok(out_file);
@@ -263,7 +279,7 @@ pub async fn export_schlib(
     let (footprint_model_name, footprint_library_file) =
         if let Some(footprint_uuid) = item.footprint_uuid() {
             let footprint_data = client.component_detail(&footprint_uuid).await?;
-            let footprint_name = resolved_component_name(item, &footprint_data);
+            let footprint_name = resolved_footprint_name(item, &footprint_data);
             (
                 Some(footprint_name.clone()),
                 Some(format!("{}.PcbLib", sanitize_filename(&footprint_name))),
@@ -567,6 +583,33 @@ mod tests {
         assert_eq!(
             resolve_schlib_comment(&item).as_deref(),
             Some("XC7Z020-2CLG400I")
+        );
+    }
+
+    #[test]
+    fn resolves_footprint_name_from_payload_metadata() {
+        let item = SearchItem {
+            index: 0,
+            display_title: "STM8S003F3U6TR".to_string(),
+            title: String::new(),
+            manufacturer: "ST".to_string(),
+            model_uuid: None,
+            raw: json!({
+                "footprint": {
+                    "display_title": "UFQFPN-20_L3.0-W3.0-P0.50-TL"
+                }
+            }),
+        };
+        let payload = json!({
+            "result": {
+                "display_title": "UFQFPN-20_L3.0-W3.0-P0.50-TL",
+                "package": "UFQFPN-20"
+            }
+        });
+
+        assert_eq!(
+            resolved_footprint_name(&item, &payload),
+            "UFQFPN-20_L3.0-W3.0-P0.50-TL"
         );
     }
 }

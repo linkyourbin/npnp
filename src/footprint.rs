@@ -332,7 +332,7 @@ pub fn build_pcblib_from_payload(
         resolve_component_height_mm(payload, component_name, model_3d.as_ref());
     let mut component = PcbComponent {
         name: component_name.to_string(),
-        description: "Generated from EasyEDA footprint".to_string(),
+        description: resolve_footprint_description(payload, component_name),
         height_raw: raw_from_mm(component_height_mm),
         pads: Vec::new(),
         arcs: Vec::new(),
@@ -694,6 +694,34 @@ fn resolve_component_height_mm(
     1.0
 }
 
+fn resolve_footprint_description(payload: &Value, component_name: &str) -> String {
+    let preferred = nested_string(payload, &["result", "description"])
+        .or_else(|| nested_string(payload, &["description"]))
+        .and_then(|text| normalize_footprint_description(&text));
+
+    preferred
+        .or_else(|| nested_string(payload, &["result", "display_title"]))
+        .or_else(|| nested_string(payload, &["display_title"]))
+        .or_else(|| nested_string(payload, &["result", "package"]))
+        .or_else(|| nested_string(payload, &["package"]))
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| format!("Generated from EasyEDA footprint ({component_name})"))
+}
+
+fn normalize_footprint_description(text: &str) -> Option<String> {
+    let parts: Vec<String> = text
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("; "))
+    }
+}
+
 fn try_parse_height_from_model_title(title: &str) -> Option<f64> {
     let normalized = title.trim().to_ascii_uppercase();
     let mut index = normalized.find("-H").or_else(|| normalized.find("_H"))? + 2;
@@ -916,6 +944,96 @@ fn add_raw_point(points: &mut Vec<RawPoint>, x: f64, y: f64) {
     points.push(RawPoint { x, y });
 }
 
+fn add_axis_aligned_rect_points(
+    points: &mut Vec<RawPoint>,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+) {
+    let x2 = x + width;
+    let y2 = y - height;
+    let left = x.min(x2);
+    let right = x.max(x2);
+    let top = y.max(y2);
+    let bottom = y.min(y2);
+    let radius = radius.abs().min((right - left).abs() / 2.0).min((top - bottom).abs() / 2.0);
+
+    if radius <= 1e-9 {
+        add_raw_point(points, left, top);
+        add_raw_point(points, right, top);
+        add_raw_point(points, right, bottom);
+        add_raw_point(points, left, bottom);
+        add_raw_point(points, left, top);
+        return;
+    }
+
+    const CORNER_SEGMENTS: usize = 6;
+    add_raw_point(points, left + radius, top);
+    add_raw_point(points, right - radius, top);
+    append_corner_arc(
+        points,
+        right - radius,
+        top - radius,
+        radius,
+        90.0,
+        0.0,
+        CORNER_SEGMENTS,
+    );
+    add_raw_point(points, right, bottom + radius);
+    append_corner_arc(
+        points,
+        right - radius,
+        bottom + radius,
+        radius,
+        0.0,
+        -90.0,
+        CORNER_SEGMENTS,
+    );
+    add_raw_point(points, left + radius, bottom);
+    append_corner_arc(
+        points,
+        left + radius,
+        bottom + radius,
+        radius,
+        -90.0,
+        -180.0,
+        CORNER_SEGMENTS,
+    );
+    add_raw_point(points, left, top - radius);
+    append_corner_arc(
+        points,
+        left + radius,
+        top - radius,
+        radius,
+        180.0,
+        90.0,
+        CORNER_SEGMENTS,
+    );
+    add_raw_point(points, left + radius, top);
+}
+
+fn append_corner_arc(
+    points: &mut Vec<RawPoint>,
+    center_x: f64,
+    center_y: f64,
+    radius: f64,
+    start_degrees: f64,
+    end_degrees: f64,
+    segments: usize,
+) {
+    for step in 1..=segments {
+        let t = step as f64 / segments as f64;
+        let angle = (start_degrees + (end_degrees - start_degrees) * t).to_radians();
+        add_raw_point(
+            points,
+            center_x + radius * angle.cos(),
+            center_y + radius * angle.sin(),
+        );
+    }
+}
+
 fn parse_path_raw_points(shape: &Value) -> Vec<RawPoint> {
     let Some(array) = shape.as_array() else {
         return Vec::new();
@@ -943,6 +1061,22 @@ fn parse_path_raw_points(shape: &Value) -> Vec<RawPoint> {
                     add_raw_point(&mut points, x, y);
                     i += 2;
                 }
+            } else if command == "R" {
+                let Some(x) = value_f64(array.get(i)) else {
+                    continue;
+                };
+                let Some(y) = value_f64(array.get(i + 1)) else {
+                    continue;
+                };
+                let Some(width) = value_f64(array.get(i + 2)) else {
+                    continue;
+                };
+                let Some(height) = value_f64(array.get(i + 3)) else {
+                    continue;
+                };
+                let radius = value_f64(array.get(i + 4)).unwrap_or(0.0);
+                add_axis_aligned_rect_points(&mut points, x, y, width, height, radius);
+                i += 5;
             } else if command == "ARC" || command == "A" {
                 if i + 2 < array.len() && value_f64(array.get(i)).is_some() {
                     if let (Some(x), Some(y)) =
@@ -1156,7 +1290,10 @@ fn mask_region_layers(layer_code: i32, hole_mm: f64) -> Vec<(u8, &'static str)> 
 
 #[cfg(test)]
 mod tests {
-    use super::{build_pcblib_from_payload, rectangular_pad_outline};
+    use super::{
+        RawPoint, build_pcblib_from_payload, normalize_footprint_description, parse_path_raw_points,
+        rectangular_pad_outline,
+    };
     use crate::pcblib::{LAYER_MECHANICAL_9, PAD_SHAPE_ROUND};
     use serde_json::json;
 
@@ -1216,5 +1353,42 @@ mod tests {
             .iter()
             .any(|region| region.layer == LAYER_MECHANICAL_9 && region.outline.len() == 6));
         assert_eq!(component.extended_primitive_information.len(), 1);
+    }
+
+    #[test]
+    fn normalizes_semicolon_footprint_description() {
+        assert_eq!(
+            normalize_footprint_description(";UFQFPN-20(3x3);UFQFPN-20;UFQFPN-20_L3.0-W3.0-P0.50"),
+            Some("UFQFPN-20(3x3); UFQFPN-20; UFQFPN-20_L3.0-W3.0-P0.50".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_rectangular_r_path_command() {
+        let shape = json!(["R", -100.001, 35, 200, 70, 0]);
+        let points = parse_path_raw_points(&shape);
+        assert_eq!(points.len(), 5);
+        assert_eq!(
+            points,
+            vec![
+                RawPoint {
+                    x: -100.001,
+                    y: 35.0
+                },
+                RawPoint { x: 99.999, y: 35.0 },
+                RawPoint {
+                    x: 99.999,
+                    y: -35.0
+                },
+                RawPoint {
+                    x: -100.001,
+                    y: -35.0
+                },
+                RawPoint {
+                    x: -100.001,
+                    y: 35.0
+                },
+            ]
+        );
     }
 }
