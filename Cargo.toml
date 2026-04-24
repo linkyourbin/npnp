@@ -1,7 +1,8 @@
 [package]
 name = "npnp"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
+autobins = false
 authors = ["linkyourbin"]
 description = "Normalize Pin Net Pad (npnp): pure Rust LCEDA/EasyEDA downloader and Altium library exporter"
 readme = "README.md"
