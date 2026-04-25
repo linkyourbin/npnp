@@ -30,6 +30,26 @@ Normalize Pin Net Pad (`npnp`) is an LCEDA/EasyEDA downloader and Altium library
 - Resume non-merged batch exports with checkpoint files.
 - Retry transient LCEDA/EasyEDA request failures automatically.
 
+Overview:
+
+![Merged output overview](imgs/overview.png)
+
+Schematic library screenshots:
+
+<p align="center">
+  <img src="imgs/sch_01.png" alt="Merged schematic screenshot 1" width="32%">
+  <img src="imgs/sch_02.png" alt="Merged schematic screenshot 2" width="32%">
+  <img src="imgs/sch_03.png" alt="Merged schematic screenshot 3" width="32%">
+</p>
+
+PCB library screenshots:
+
+<p align="center">
+  <img src="imgs/pcb_01.png" alt="Merged PCB screenshot 1" width="32%">
+  <img src="imgs/pcb_02.png" alt="Merged PCB screenshot 2" width="32%">
+  <img src="imgs/pcb_03.png" alt="Merged PCB screenshot 3" width="32%">
+</p>
+
 ## Requirements
 
 - Rust toolchain for building from source.
@@ -653,26 +673,6 @@ These examples come from a merged export workflow such as:
 ```powershell
 npnp batch --input ids.txt --output generated\merged_check --merge --library-name MyLib --full --force --continue-on-error
 ```
-
-Overview:
-
-![Merged output overview](imgs/overview.png)
-
-Schematic library screenshots:
-
-<p align="center">
-  <img src="imgs/sch_01.png" alt="Merged schematic screenshot 1" width="32%">
-  <img src="imgs/sch_02.png" alt="Merged schematic screenshot 2" width="32%">
-  <img src="imgs/sch_03.png" alt="Merged schematic screenshot 3" width="32%">
-</p>
-
-PCB library screenshots:
-
-<p align="center">
-  <img src="imgs/pcb_01.png" alt="Merged PCB screenshot 1" width="32%">
-  <img src="imgs/pcb_02.png" alt="Merged PCB screenshot 2" width="32%">
-  <img src="imgs/pcb_03.png" alt="Merged PCB screenshot 3" width="32%">
-</p>
 
 ## License
 
